@@ -35,3 +35,5 @@ diagnosis.
 ## Forking
 
 The licence is GPL-3.0-or-later. Fork it and take it wherever you want.
+
+<!-- workflow verification, to be deleted -->
