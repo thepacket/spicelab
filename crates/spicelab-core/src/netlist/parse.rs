@@ -217,6 +217,22 @@ fn tokenize(s: &str) -> Vec<String> {
 
 /// Rejoin tokens split around a lone `=`, so `w = 10u` becomes `w=10u`.
 fn pair_up(toks: Vec<String>) -> Vec<String> {
+    // `PARAMS:` is a PSpice-family keyword introducing a subcircuit's parameter
+    // list, on both the definition and the instance:
+    //
+    //     .SUBCKT SUB1 a b PARAMS: RVAL=1
+    //     X1 2 3 SUB1 PARAMS: RVAL=2
+    //
+    // It carries no information beyond "key=value pairs follow", which is
+    // already unambiguous, so it is dropped here rather than special-cased at
+    // every site that reads positional arguments. Leaving it in made the token
+    // after the subcircuit name look positional, so the name did not resolve
+    // and a perfectly ordinary vendor macromodel was reported as referencing an
+    // undefined subcircuit.
+    let toks: Vec<String> = toks
+        .into_iter()
+        .filter(|t| !t.eq_ignore_ascii_case("params:"))
+        .collect();
     let mut out: Vec<String> = Vec::with_capacity(toks.len());
     let mut i = 0;
     while i < toks.len() {

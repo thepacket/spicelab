@@ -724,12 +724,25 @@ it on the canvas as a SPICE text block — never uploaded, so the vendor's file
 stays the user's copy. It reports which `.subckt` names the file defines,
 because that is what you must type into a `subckt` block next.
 
-## Parser conformance: ngspice's own test suite
+## Parser conformance: two third-party corpora
 
-`tests/corpus.test.mjs` runs ngspice's ~575 test netlists (Modified BSD, from
-the `build:ngspice` tree) through `checkNetlist`. Different evidence from the
-analytic suite: those prove the numbers are right, this proves we can READ what
-people actually write. It skips when the tree is absent.
+`tests/corpus.test.mjs` runs real SPICE from other projects through
+`checkNetlist`. Different evidence from the analytic suite: those prove the
+numbers are right, this proves we can READ what people actually write. Neither
+corpus is vendored; each is fetched separately and skipped when absent.
+
+| Corpus | Files | Budget | Strength |
+|---|---|---|---|
+| ngspice regression suite | 623 | **0** | Broad, decades of hands |
+| Xyce_Regression (< 3 KB) | 3,726 | 168 | Directives — `.measure` 446, `.step` 480, `.sens` 241 |
+
+The Xyce budget is a list of KNOWN GAPS, not an acceptance of them: the test
+prints the top causes even when passing, so they stay visible. Ratchet both
+down; never up.
+
+Xyce_Regression grants GPLv3-or-later **in its README text**, though the
+`COPYING` file it links does not exist in the repository. The grant is the
+licence statement, not the file.
 
 The budget for `invalid` is **zero**, and getting there fixed four defects:
 
@@ -745,6 +758,22 @@ The budget for `invalid` is **zero**, and getting there fixed four defects:
 
 That last point generalises: **a refusal classified as `invalid` when it should
 be `unsupported` is not a cosmetic error.** It changes what the app does.
+
+Two further defects came out of the Xyce corpus:
+
+- **`PARAMS:` was not understood.** It is the PSpice-family keyword introducing
+  a subcircuit parameter list, on the definition, the instance or both, and
+  vendor `.lib` files use it constantly. Leaving it in the token stream made the
+  token after the subcircuit name look positional, so the name did not resolve
+  and an ordinary macromodel was reported as referencing an undefined
+  subcircuit. Dropped in `pair_up`; 28 more netlists parse.
+- **Expression failures were all `invalid`.** An unknown FUNCTION is nearly
+  always a feature gap — this evaluator has about a dozen built-ins where
+  ngspice and Xyce have many more, and `.func` is not implemented at all — as is
+  a reference to a built-in VARIABLE like `{freq}` or `temper`. Both are
+  `unsupported` now. An unknown IDENT is deliberately still `invalid`: a
+  misspelled parameter is a real and common mistake, and reporting it precisely
+  is worth more than routing it onward.
 
 **`ErrorKind` has a third value, `unresolved`**, for a netlist referencing a
 file that could not be fetched. 126 corpus netlists were being called malformed

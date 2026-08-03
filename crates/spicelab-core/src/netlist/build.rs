@@ -47,8 +47,8 @@ fn err<T>(line: usize, message: impl Into<String>) -> Result<T, ParseError> {
     Err(ParseError {
         line,
         message: message.into(),
-                kind: ErrorKind::Invalid,
-            })
+        kind: ErrorKind::Invalid,
+    })
 }
 
 fn is_ground(n: &str) -> bool {
@@ -102,10 +102,10 @@ pub struct FlatElement {
 impl FlatElement {
     fn num(&self, s: &str) -> Result<f64, ParseError> {
         eval(s, &self.scope).map_err(|e| ParseError {
+            kind: if e.is_unsupported() { ErrorKind::Unsupported } else { ErrorKind::Invalid },
             line: self.line,
             message: format!("{}: {e}", self.name),
-                kind: ErrorKind::Invalid,
-            })
+        })
     }
 
     /// Positional argument `i`, evaluated.
@@ -298,10 +298,10 @@ pub fn flatten(nl: &Netlist) -> Result<Vec<FlatElement>, ParseError> {
     let mut globals: HashMap<String, f64> = HashMap::new();
     for (k, v) in &nl.params {
         let val = eval(v, &globals).map_err(|e| ParseError {
+            kind: if e.is_unsupported() { ErrorKind::Unsupported } else { ErrorKind::Invalid },
             line: 0,
             message: format!("parameter '{k}' = '{v}': {e}"),
-                kind: ErrorKind::Invalid,
-            })?;
+        })?;
         globals.insert(k.clone(), val);
     }
 
@@ -387,9 +387,9 @@ fn expand<'n>(
             let mut inner_scope = resolve_map(&sub.params, &scope, sub.line)?;
             for (k, v) in &card.params {
                 let val = eval(v, &scope).map_err(|e| ParseError {
+                    kind: if e.is_unsupported() { ErrorKind::Unsupported } else { ErrorKind::Invalid },
                     line: card.line,
                     message: format!("{}: parameter '{k}': {e}", card.name),
-                kind: ErrorKind::Invalid,
             })?;
                 inner_scope.insert(k.clone(), val);
             }

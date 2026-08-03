@@ -27,6 +27,42 @@ pub enum ExprError {
     },
 }
 
+/// Simulator-provided variables that a netlist may legitimately reference and
+/// this evaluator does not supply.
+///
+/// `{freq}` in a resistor value is analog behavioural modelling — the value
+/// varies with the AC analysis frequency. `temper` is the sweep temperature.
+/// These are BUILT-INS of the language, not user parameters, so an expression
+/// using one is valid SPICE this core does not implement, and must be reported
+/// as such rather than as an undefined name.
+const BUILTIN_VARS: &[&str] = &["freq", "hertz", "time", "temper", "temp", "vt"];
+
+impl ExprError {
+    /// Whether this failure means "not implemented here" rather than "wrong".
+    ///
+    /// The distinction drives engine selection: `unsupported` falls through to
+    /// a bigger engine, `invalid` stops and blames the netlist. An unknown
+    /// FUNCTION is nearly always a feature gap — this evaluator has about a
+    /// dozen built-ins where ngspice and Xyce have many more, plus user
+    /// definitions via `.func`, which is not implemented at all. Treating that
+    /// as a malformed netlist told the user their deck was broken AND stopped
+    /// it reaching the engine that implements the function.
+    ///
+    /// An unknown IDENT is deliberately NOT included in general: a misspelled
+    /// parameter is a real, common mistake and reporting it precisely is worth
+    /// more than routing it onward. Only the known built-in variables above
+    /// count as unimplemented.
+    pub fn is_unsupported(&self) -> bool {
+        match self {
+            ExprError::UnknownFunction(_) => true,
+            ExprError::UnknownIdent(n) => {
+                BUILTIN_VARS.contains(&n.to_lowercase().as_str())
+            }
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Display for ExprError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

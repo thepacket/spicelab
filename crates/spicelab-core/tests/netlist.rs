@@ -694,3 +694,31 @@ fn two_opamp_instances_stay_independent() {
     check("first stage (-10x)", c.voltage("o1").unwrap(), -1.0, 1e-4);
     check("second stage (-2x)", c.voltage("o2").unwrap(), 2.0, 1e-4);
 }
+
+/// `PARAMS:` is the PSpice-family keyword introducing a subcircuit parameter
+/// list, on the definition, the instance, or both. It carries no information
+/// beyond "key=value pairs follow" — but leaving it in the token stream made
+/// the token after the subcircuit name look positional, so the name did not
+/// resolve and an ordinary vendor macromodel was reported as referencing an
+/// undefined subcircuit. Vendor `.lib` files use this spelling constantly.
+#[test]
+fn pspice_params_keyword_is_accepted() {
+    let build = |inst: &str, def: &str| {
+        let src = format!(
+            "psp\nV1 1 0 DC 1\n{inst}\n{def}\nR1 a b {{RVAL*1000}}\n.ENDS\n.op\n.end"
+        );
+        let nl = parse(&src).expect("parses");
+        let mut c = build(&nl).expect("builds");
+        op(&mut c).unwrap();
+        // R = V / I, with the source current negative into the source.
+        1.0 / -c.current("V1").unwrap()
+    };
+    let near = |got: f64, want: f64| {
+        assert!((got - want).abs() < 1e-6, "got {got}, expected {want}");
+    };
+    near(build("X1 1 0 SUB1 PARAMS: RVAL=2", ".SUBCKT SUB1 a b PARAMS: RVAL=1"), 2000.0);
+    near(build("X1 1 0 SUB1 RVAL=2", ".SUBCKT SUB1 a b PARAMS: RVAL=1"), 2000.0);
+    near(build("X1 1 0 SUB1 RVAL=2", ".SUBCKT SUB1 a b RVAL=1"), 2000.0);
+    // The definition's default must survive when the instance overrides nothing.
+    near(build("X1 1 0 SUB1", ".SUBCKT SUB1 a b PARAMS: RVAL=5"), 5000.0);
+}

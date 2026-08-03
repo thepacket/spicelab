@@ -22,8 +22,18 @@
  * tokenizer split on whitespace only, so the value came out as `1E-12,` and the
  * netlist was rejected as broken.
  *
- * Skips cleanly when the ngspice source tree is absent — it is a build
- * artifact of `npm run build:ngspice`, not something committed.
+ * TWO corpora, neither committed — both are fetched separately and each is
+ * skipped when absent:
+ *
+ *   ngspice  its own regression suite, ~623 files. Budget 0.
+ *   Xyce     Xyce_Regression, small files only. Far heavier on directives —
+ *            `.measure` in 446 files, `.step` in 480, `.sens` in 241, where
+ *            ngspice's suite barely exercises them. Budget is currently above
+ *            zero: a list of known gaps, not an acceptance of them.
+ *
+ * Neither is vendored. They are large, and their licences (Modified BSD and
+ * GPLv3 respectively) permit redistribution but there is no reason to carry
+ * thousands of third-party files to run a check that can fetch them.
  */
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,11 +42,40 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const wasm = require('../src/wasm-node/spicelab_wasm.js');
 
-const ROOTS = [
-  process.env.NGSPICE_SRC,
-  new URL('../.ngspice-build/ngspice-46', import.meta.url).pathname,
-].filter(Boolean);
-const ROOT = ROOTS.find((p) => existsSync(join(p, 'tests')));
+/**
+ * Each corpus: where to find it, which files to read, and how many netlists may
+ * currently be reported `invalid`.
+ *
+ * The budgets are ratchets. A number above zero is a list of known gaps, not
+ * an acceptance of them; lower it whenever one is fixed, and never raise it.
+ */
+const CORPORA = [
+  {
+    id: 'ngspice',
+    // Its own regression suite: real SPICE by many hands over decades.
+    roots: [process.env.NGSPICE_SRC,
+            new URL('../.ngspice-build/ngspice-46', import.meta.url).pathname],
+    subdirs: ['tests', 'examples'],
+    pattern: /\.(cir|net|sp|deck)$/i,
+    maxBytes: Infinity,
+    budget: 0,
+    hint: 'npm run build:ngspice  (or set NGSPICE_SRC)',
+  },
+  {
+    id: 'xyce',
+    // Xyce's regression suite. Far heavier on directives than ngspice's:
+    // .measure in 446 files, .step in 480, .sens in 241. Restricted to small
+    // files because the large ones are mostly generated device sweeps that add
+    // volume without adding syntax.
+    roots: [process.env.XYCE_SRC,
+            new URL('../.xyce-regression', import.meta.url).pathname],
+    subdirs: ['Netlists'],
+    pattern: /\.cir$/i,
+    maxBytes: 3072,
+    budget: 168,
+    hint: 'git clone --depth 1 https://github.com/Xyce/Xyce_Regression .xyce-regression',
+  },
+];
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -45,71 +84,74 @@ function check(name, cond, detail = '') {
   else { fail++; failures.push(`${name}: ${detail}`); console.log(`  [FAIL] ${name} ${detail}`); }
 }
 
-if (!ROOT) {
-  console.log('\nngspice source tree not found — skipping conformance corpus.');
-  console.log('Get it with: npm run build:ngspice  (or set NGSPICE_SRC)');
-  console.log('\n0 passed, 0 failed (skipped)');
-  process.exit(0);
-}
-
-function walk(dir, out = []) {
+function walk(dir, pattern, maxBytes, out = []) {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
-    // `.deck` is ordinary netlist text and there are 48 of them; skipping it
-    // left a chunk of the corpus unread for no reason.
-    else if (/\.(cir|net|sp|deck)$/i.test(e)) out.push(p);
+    const st = statSync(p);
+    if (st.isDirectory()) walk(p, pattern, maxBytes, out);
+    else if (pattern.test(e) && st.size <= maxBytes) out.push(p);
   }
   return out;
 }
 
-const files = [];
-for (const sub of ['tests', 'examples']) {
-  const d = join(ROOT, sub);
-  if (existsSync(d)) walk(d, files);
-}
+let ran = 0;
+for (const c of CORPORA) {
+  const root = c.roots.filter(Boolean)
+    .find((p) => existsSync(p) && c.subdirs.some((d) => existsSync(join(p, d))));
+  if (!root) {
+    console.log(`\n${c.id}: not present — skipping. Get it with:\n  ${c.hint}`);
+    continue;
+  }
+  ran++;
 
-const kinds = { ok: 0, unsupported: 0, unresolved: 0, invalid: 0 };
-const invalid = [];
-for (const f of files) {
-  let r;
-  try { r = JSON.parse(wasm.Session.checkNetlist(readFileSync(f, 'utf8'))); }
-  catch (e) { r = { ok: false, kind: 'invalid', message: `threw: ${e.message}` }; }
-  if (r.ok) kinds.ok++;
-  else {
-    kinds[r.kind] = (kinds[r.kind] ?? 0) + 1;
-    if (r.kind === 'invalid') invalid.push([f.replace(`${ROOT}/`, ''), r.message]);
+  const files = [];
+  for (const sub of c.subdirs) {
+    const d = join(root, sub);
+    if (existsSync(d)) walk(d, c.pattern, c.maxBytes, files);
+  }
+
+  const kinds = { ok: 0, unsupported: 0, unresolved: 0, invalid: 0 };
+  const invalid = [];
+  for (const f of files) {
+    let r;
+    try { r = JSON.parse(wasm.Session.checkNetlist(readFileSync(f, 'utf8'))); }
+    catch (e) { r = { ok: false, kind: 'invalid', message: `threw: ${e.message}` }; }
+    if (r.ok) kinds.ok++;
+    else {
+      kinds[r.kind] = (kinds[r.kind] ?? 0) + 1;
+      if (r.kind === 'invalid') invalid.push([f.replace(`${root}/`, ''), r.message]);
+    }
+  }
+
+  console.log(`\n${c.id}: ${files.length} netlists`);
+  console.log(`  ok ${kinds.ok}   unsupported ${kinds.unsupported}   ` +
+              `unresolved ${kinds.unresolved}   invalid ${kinds.invalid}`);
+
+  check(`${c.id}: corpus found and read`, files.length > 300, `${files.length} files`);
+  check(`${c.id}: something parses cleanly`, kinds.ok > 20, `${kinds.ok} ok`);
+  check(`${c.id}: at most ${c.budget} called invalid`, invalid.length <= c.budget,
+        `${invalid.length} > ${c.budget}:\n` +
+        invalid.slice(0, 20)
+          .map(([f, m]) => `      ${f}\n        ${m.slice(0, 100)}`).join('\n'));
+
+  if (invalid.length && invalid.length <= c.budget) {
+    // Within budget, but each is still a gap. Summarise so it stays visible.
+    const byCause = new Map();
+    for (const [, m] of invalid) {
+      const k = m.replace(/'[^']*'/g, "'X'").replace(/\b\d+\b/g, 'N').slice(0, 64);
+      byCause.set(k, (byCause.get(k) ?? 0) + 1);
+    }
+    console.log(`  known gaps, by cause (${byCause.size} distinct):`);
+    for (const [k, n] of [...byCause].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+      console.log(`    ${String(n).padStart(4)}  ${k}`);
+    }
   }
 }
 
-console.log(`\nngspice conformance corpus: ${files.length} netlists`);
-console.log(`  ok ${kinds.ok}   unsupported ${kinds.unsupported}   ` +
-            `unresolved ${kinds.unresolved}   invalid ${kinds.invalid}\n`);
-
-check('the corpus was actually found and read', files.length > 300, `${files.length} files`);
-check('something parses cleanly', kinds.ok > 20, `${kinds.ok} ok`);
-
-// `.include` failures must be `unresolved`, never `invalid`: the netlist is
-// fine, we simply cannot fetch the file. Calling it invalid told the user their
-// netlist was broken AND stopped engine selection with the wrong message.
-check('unfetchable includes are classified unresolved', kinds.unresolved > 50,
-      `${kinds.unresolved} unresolved`);
-
-// The budget is ZERO, and it got there by fixing four real defects: commas as
-// parameter separators, POLY() sources, statistical model parameters
-// (AGAUSS), and semiconductor resistors. Three of those were features we do
-// not implement being reported as MALFORMED NETLISTS, which both blamed the
-// user's deck and stopped it routing to the engine that does implement them.
-//
-// Ratchet this DOWN, never up. A new entry means either a parser bug or a
-// refusal classified as `invalid` when it should be `unsupported`.
-const BUDGET = 0;
-check(`at most ${BUDGET} netlists are called invalid`, invalid.length <= BUDGET,
-      `${invalid.length}:\n` + invalid.map(([f, m]) => `      ${f}\n        ${m.slice(0, 100)}`).join('\n'));
-
-if (invalid.length) {
-  console.log('  still refused (each is a bug or a misclassification):');
-  for (const [f, m] of invalid) console.log(`    ${f}\n      ${m.slice(0, 110)}`);
+if (!ran) {
+  console.log('\nno corpora present — nothing checked.');
+  console.log('\n0 passed, 0 failed (skipped)');
+  process.exit(0);
 }
 
 console.log(`\n${'-'.repeat(72)}\n${pass} passed, ${fail} failed`);

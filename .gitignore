@@ -11,3 +11,6 @@ src/wasm-node/
 # Built by scripts/build-ngspice.sh. ~5 MB; rebuild rather than commit.
 src/ngspice/
 .ngspice-build/
+
+# Fetched by hand for tests/corpus.test.mjs; not vendored.
+.xyce-regression/
