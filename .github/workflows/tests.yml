@@ -1,0 +1,90 @@
+name: tests
+
+# Runs the validation suite the README claims. Without this, "four independent
+# layers of validation" is an assertion rather than something anyone can check.
+#
+# The two parser conformance corpora (ngspice's and Xyce's regression suites)
+# are NOT vendored, so `tests/corpus.test.mjs` would normally skip here. Xyce's
+# is a shallow clone and cheap, so it runs; ngspice's source tree only exists if
+# the coverage engine is built, which takes ~5 minutes and is left out of the
+# per-push run deliberately.
+
+# Push and manual only. NOT pull_request_target: that trigger runs with the
+# base repository's permissions, and a workflow using it must never check out
+# or execute the contributor's branch. Testing PRs is pointless here anyway —
+# they are closed automatically.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # There are no npm dependencies — the JS is plain ES modules with JSDoc,
+      # which is what makes the reference oracle cheap to run in Node and in a
+      # browser worker unchanged. Asserted here so that stops being true loudly
+      # rather than by a mysterious CI failure later.
+      - name: Assert the JS stays dependency-free
+        run: |
+          node -e '
+            const p = JSON.parse(require("node:fs").readFileSync("package.json"));
+            const d = {...p.dependencies, ...p.devDependencies};
+            if (Object.keys(d).length) {
+              console.error("npm dependencies appeared:", Object.keys(d).join(", "));
+              console.error("Add an install step, or reconsider — see CLAUDE.md.");
+              process.exit(1);
+            }
+            console.log("no npm dependencies, as intended");
+          '
+
+      # ngspice is the differential reference — the layer that found the real
+      # device bugs. tests/ngspice-diff.test.mjs skips cleanly without it, so a
+      # failure to install degrades coverage rather than breaking the run, but
+      # it should not fail silently either.
+      - name: Install ngspice
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ngspice
+          ngspice --version | head -2
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      # The CLI version must match the wasm-bindgen crate in Cargo.lock, or the
+      # generated bindings are subtly wrong. Read it from the lockfile rather
+      # than pinning a second copy that can drift.
+      - name: Install wasm-bindgen-cli
+        run: |
+          VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock \
+                    | grep '^version' | head -1 | cut -d'"' -f2)
+          echo "wasm-bindgen $VERSION (from Cargo.lock)"
+          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch the Xyce conformance corpus
+        run: |
+          git clone --depth 1 -q https://github.com/Xyce/Xyce_Regression.git \
+            .xyce-regression
+          echo "netlists: $(find .xyce-regression -name '*.cir' | wc -l)"
+
+      - name: Build wasm
+        run: npm run build:wasm
+
+      - name: Run the suite
+        run: npm test
