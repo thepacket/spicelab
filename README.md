@@ -1,5 +1,7 @@
 # SpiceLab
 
+[![tests](https://github.com/thepacket/spicelab/actions/workflows/tests.yml/badge.svg)](https://github.com/thepacket/spicelab/actions/workflows/tests.yml)
+
 A SPICE-class analog circuit simulator that runs entirely in the browser, with a
 schematic editor, instruments and a GPU waveform renderer. Nothing is uploaded;
 the solver runs on your machine.
@@ -60,7 +62,7 @@ four independent layers, and `npm test` runs all of them:
 | Analytic suite | Closed-form answers — RC steps, LC energy conservation, transformer turns ratios, known bias points |
 | Golden fixtures | The Rust core reproduces the JS reference oracle exactly |
 | **ngspice differential** | An independent implementation agrees. This is the layer that found the real bugs |
-| **Parser conformance** | ngspice's own 623 test netlists all parse, with none reported as malformed |
+| **Parser conformance** | Third-party regression suites — ngspice's 623 netlists and Xyce's 3,726 — parse without being reported as malformed |
 
 The third layer earns its keep. The oracle only proves the Rust core reproduces
 *itself* — both were written from the same reading of the same equations, so a
