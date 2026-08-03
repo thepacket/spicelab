@@ -1,0 +1,908 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SpiceLab</title>
+<script>
+  // Applied before first paint: reading the stored theme from the module would
+  // run after the stylesheet, and the page would visibly flip on every reload.
+  try {
+    var t = localStorage.getItem('spicelab.theme');
+    if (t === 'light') document.documentElement.dataset.theme = 'light';
+  } catch (e) { /* private mode: fall through to the dark default */ }
+</script>
+<style>
+  /* Dark is the product theme and the default; light is available and must be
+     chosen. Canvas colours live in render.js — they cannot inherit from CSS, so
+     the two palettes are kept deliberately in step. */
+  :root {
+    --bg: #0f1115;
+    --panel: #161a21;
+    --panel-2: #1b212a;
+    --line: #2a3038;
+    --fg: #d6dae0;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --err: #f85149;
+    --warn: #d29922;
+    --ok: #56d364;
+    --probe: #bc8cff;
+    --hover: #232a35;
+    --hover-line: #3a434f;
+    --on-fg: #06131f;
+  }
+  /*
+   * Light is opt-IN, never the default and never driven by
+   * prefers-color-scheme: dark is this project's standing default and a light
+   * surface has to be chosen deliberately. The attribute is set on <html>
+   * before first paint, so there is no flash of the wrong theme.
+   */
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --panel: #f6f7f9;
+    --panel-2: #ebedf0;
+    --line: #d3d8de;
+    --fg: #1f2328;
+    --muted: #616a75;
+    --accent: #0969da;
+    --err: #cf222e;
+    --warn: #9a6700;
+    --ok: #1a7f37;
+    --probe: #8250df;
+    --hover: #dfe3e8;
+    --hover-line: #b6bec7;
+    --on-fg: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body { margin: 0; height: 100vh; display: grid;
+         grid-template-columns: 150px 1fr 344px;
+         font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+         color: var(--fg); }
+  aside, section { overflow: auto; min-width: 0; background: var(--panel); }
+  #palette { border-right: 1px solid var(--line); padding: .5rem; }
+  #right { border-left: 1px solid var(--line); padding: .6rem;
+           display: flex; flex-direction: column; gap: .45rem; }
+  h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--muted); margin: .85rem 0 .3rem; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  button { font: inherit; width: 100%; text-align: left; padding: .32rem .45rem;
+           margin-bottom: 2px; background: var(--panel-2); color: var(--fg);
+           border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  button:hover { background: var(--hover); border-color: var(--hover-line); }
+  button.on { background: var(--accent); color: var(--on-fg); border-color: var(--accent);
+              font-weight: 600; }
+  button small { color: var(--muted); }
+  button.on small { color: var(--on-fg); opacity: .7; }
+  #main { position: relative; display: flex; flex-direction: column;
+          min-width: 0; overflow: hidden; background: var(--bg); }
+  #sheet-wrap { flex: 1; position: relative; min-height: 0; }
+  canvas#sheet { position: absolute; inset: 0; width: 100%; height: 100%;
+                 display: block; cursor: crosshair; touch-action: none; }
+  #status { padding: .32rem .6rem; border-top: 1px solid var(--line);
+            background: var(--panel); font-size: 12px; color: var(--muted); }
+  pre { background: var(--bg); border: 1px solid var(--line); padding: .5rem;
+        margin: 0; white-space: pre-wrap; font-size: 11.5px; color: var(--fg);
+        max-height: 130px; overflow: auto; border-radius: 4px; }
+  .issue { padding: .25rem .45rem; border-left: 3px solid; margin-bottom: 2px;
+           background: var(--panel-2); font-size: 12px; border-radius: 0 3px 3px 0; }
+  .issue.error { border-color: var(--err); }
+  .issue.warning { border-color: var(--warn); }
+  .issue.none { border-color: var(--ok); color: var(--ok); }
+  label { display: block; font-size: 10px; color: var(--muted); margin-top: .3rem;
+          text-transform: uppercase; letter-spacing: .05em; }
+  input { font: inherit; width: 100%; padding: .28rem .4rem; background: var(--bg);
+          color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  textarea { font: inherit; width: 100%; padding: .28rem .4rem; background: var(--bg);
+             color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+             resize: vertical; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  details > summary { font-size: 10px; text-transform: uppercase; color: var(--muted);
+                      cursor: pointer; letter-spacing: .05em; margin: .3rem 0; }
+  .lib { padding: .35rem 0; border-bottom: 1px solid var(--line); }
+  .lib a { color: var(--accent); text-decoration: none; }
+  .lib a:hover { text-decoration: underline; }
+  .lib .what { color: var(--muted); font-size: 11px; }
+  .lib .lic { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .lic.permissive { color: var(--ok); }
+  .lic.download { color: var(--warn); }
+  .lic.mixed { color: var(--muted); }
+  /* A checkbox needs its label beside it, not above: the generic `label` rule
+     is block-level and full-width `input` would otherwise stretch the box. */
+  label.check { display: flex; align-items: center; gap: .4rem; }
+  label.check input { width: auto; flex: none; }
+  .row { display: flex; gap: .3rem; }
+  .row button { width: auto; flex: 1; text-align: center; }
+  .muted { color: var(--muted); }
+  /* flex:none matters: #right is a flex column, so a fixed-height child still
+     shrinks to nothing once the column overflows. The canvases resisted via
+     intrinsic sizing; a plain wrapper div collapsed to 0. */
+  canvas.instrument { width: 100%; height: 150px; display: block; flex: none;
+                      border: 1px solid var(--line); border-radius: 4px;
+                      background: var(--bg); }
+  .scope-wrap { position: relative; height: 150px; flex: none;
+                border: 1px solid var(--line); border-radius: 4px;
+                overflow: hidden; }
+  .scope-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+                       display: block; }
+  .scope-wrap canvas.overlay { background: transparent; border: 0; }
+  .badge { font-size: 10px; color: var(--muted); text-transform: none;
+           letter-spacing: 0; margin-left: .4rem; }
+  .probe { display: flex; align-items: center; gap: .35rem; padding: .22rem .3rem;
+           background: var(--panel-2); border-radius: 3px; margin-bottom: 2px;
+           font-size: 12px; }
+  .probe .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .probe .nm { flex: 1; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
+  .probe .rt { display: flex; gap: .18rem; }
+  .probe .rt button { width: 22px; padding: .1rem 0; text-align: center;
+                      font-size: 10px; margin: 0; }
+  .probe .x { width: 18px; padding: .1rem 0; text-align: center; margin: 0;
+              color: var(--muted); }
+  .reading { display: flex; justify-content: space-between; gap: .5rem;
+             padding: .22rem .35rem; background: var(--panel-2);
+             border-radius: 3px; margin-bottom: 2px; font-size: 12px; }
+  .reading.bad { color: var(--err); font-size: 11px; }
+  select { font: inherit; width: 100%; padding: .28rem .4rem; background: var(--bg);
+           color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+  select:focus { outline: none; border-color: var(--accent); }
+  .note { font-size: 11px; color: var(--muted); margin-top: .3rem;
+          line-height: 1.35; }
+  .tabs { display: flex; gap: .25rem; }
+  .tabs button { width: auto; flex: 1; text-align: center; font-size: 11px; }
+</style>
+
+<aside id="palette">
+  <h2>Tools</h2>
+  <button data-tool="select" class="on">Select <small>V</small></button>
+  <button data-tool="wire">Wire <small>W</small></button>
+  <button data-tool="junction">Junction</button>
+  <button data-tool="probe">Probe <small>P</small></button>
+  <h2>Parts</h2>
+  <button data-place="resistor">Resistor</button>
+  <button data-place="capacitor">Capacitor</button>
+  <button data-place="inductor">Inductor</button>
+  <button data-place="diode">Diode</button>
+  <button data-place="vsource">V source</button>
+  <button data-place="isource">I source</button>
+  <button data-place="npn">NPN</button>
+  <button data-place="nmos">NMOS</button>
+  <button data-place="ground">Ground</button>
+
+  <h2>Blocks</h2>
+  <button data-place="subckt">Subcircuit</button>
+  <button data-place="spice">SPICE text</button>
+
+  <h2>Analyses</h2>
+  <button data-place="tran">.tran</button>
+  <button data-place="ac">.ac</button>
+  <button data-place="op">.op</button>
+
+  <h2>Edit</h2>
+  <button id="rotate">Rotate <small>R</small></button>
+  <button id="mirror">Mirror <small>M</small></button>
+  <button id="del">Delete <small>⌫</small></button>
+  <div class="row"><button id="undo">Undo</button><button id="redo">Redo</button></div>
+  <h2>File</h2>
+  <div class="row"><button id="save">Save</button><button id="open">Open</button></div>
+  <button id="example">Load example</button>
+
+  <h2>View</h2>
+  <button id="theme">Theme <small>dark</small></button>
+</aside>
+
+<div id="main">
+  <div id="sheet-wrap"><canvas id="sheet"></canvas></div>
+  <div id="status">ready</div>
+</div>
+
+<section id="right">
+  <h2>Selection</h2>
+  <div id="props"><small class="muted">nothing selected</small></div>
+
+  <h2>Design rules</h2>
+  <div id="erc"></div>
+
+  <h2>Probes</h2>
+  <div id="probes"><small class="muted">probe tool (P), then click a wire</small></div>
+
+  <h2>Simulate <span id="engine-badge" class="badge"></span></h2>
+  <div class="row">
+    <button id="run-op">.op</button>
+    <button id="run-tran">.tran</button>
+    <button id="run-ac">.ac</button>
+  </div>
+  <div class="row">
+    <input id="tstop" value="5m" title="tstop"><input id="tstep" value="10u" title="tstep">
+  </div>
+
+  <h2>Meter</h2>
+  <div id="meter"><small class="muted">route a probe to the meter</small></div>
+
+  <h2>Oscilloscope <span id="scope-mode" class="badge"></span></h2>
+  <div class="scope-wrap">
+    <canvas id="scope-gpu"></canvas>
+    <canvas id="scope-axes" class="overlay"></canvas>
+  </div>
+
+  <h2>Bode <span id="bode-tabs" class="tabs" style="display:inline-flex"></span></h2>
+  <canvas id="bode" class="instrument"></canvas>
+
+  <h2>Sweep <span id="sweep-status" class="badge"></span></h2>
+  <div class="row">
+    <input id="sw-ref" value="R1" title="component reference">
+    <input id="sw-from" value="100" title="from">
+    <input id="sw-to" value="10k" title="to">
+  </div>
+  <div class="row">
+    <input id="sw-n" value="60" title="points">
+    <button id="run-sweep">Run sweep</button>
+  </div>
+  <canvas id="sweep-plot" class="instrument" style="height:130px"></canvas>
+
+  <h2>Model libraries</h2>
+  <div class="row">
+    <button id="import-model">Import model file…</button>
+  </div>
+  <input type="file" id="model-file" accept=".lib,.sub,.mod,.cir,.net,.txt,.spi"
+         style="display:none">
+  <details id="libs"><summary>where to get models and circuits</summary>
+    <div id="libs-body"></div>
+  </details>
+
+  <h2>Netlist</h2>
+  <pre id="netlist"></pre>
+</section>
+
+<script type="module">
+import { Schematic, SYMBOLS } from '../src/schematic/model.js';
+import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
+import { probeColor } from '../src/instruments/probe.js';
+import { MODEL_SOURCES, CIRCUIT_SOURCES, LICENCE_NOTE } from '../src/schematic/libraries.js';
+import { Editor } from '../src/schematic/editor.js';
+import { toNetlist } from '../src/schematic/emit.js';
+import { defaultPartFor, getPart, partsFor } from '../src/schematic/parts.js';
+import { extractNets, netAt } from '../src/schematic/nets.js';
+import { SimClient } from '../src/worker/client.js';
+import { Probe, ProbeKind, ProbeSet } from '../src/instruments/probe.js';
+import { Oscilloscope, BodePlotter, Meter, eng } from '../src/instruments/instruments.js';
+import { GpuScope, ScopeAxes } from '../src/instruments/gpu-scope.js';
+import { BatchRunner } from '../src/worker/batch.js';
+
+const sheet = document.getElementById('sheet');
+const renderer = new Renderer(sheet);
+const editor = new Editor(sheet, renderer);
+const status = (m) => (document.getElementById('status').textContent = m);
+
+/**
+ * Report which engine ran, and warn when it is not the interactive one.
+ *
+ * Not cosmetic: the coverage engine cannot re-solve within a frame and cannot
+ * be paused mid-run, so a design that lands there behaves differently. Leaving
+ * that invisible would make the app feel intermittently broken.
+ */
+const engineBadge = document.getElementById('engine-badge');
+function showEngine(client) {
+  const e = client?.engine;
+  if (!e) { engineBadge.textContent = ''; engineBadge.title = ''; return; }
+  engineBadge.textContent = e.interactive ? e.label : `${e.label} — not interactive`;
+  engineBadge.title = client.engineReason || '';
+  engineBadge.style.color = e.interactive ? '' : 'var(--warn)';
+}
+
+const probes = new ProbeSet();
+
+// Prefer the GPU renderer; fall back to Canvas2D on the same overlay canvas.
+// The fallback is a real path, not a formality — WebGPU is still absent on
+// plenty of configurations.
+const gpuCanvas = document.getElementById('scope-gpu');
+const axesCanvas = document.getElementById('scope-axes');
+const gpu = await GpuScope.create(gpuCanvas, 'scope');
+const axes = gpu ? new ScopeAxes(axesCanvas) : null;
+const scope = gpu ?? new Oscilloscope(axesCanvas, 'scope');
+if (!gpu) gpuCanvas.style.display = 'none';
+document.getElementById('scope-mode').textContent = gpu ? 'WebGPU' : 'Canvas2D';
+
+/** Draw the scope plus, on the GPU path, its separate axis overlay. */
+function drawScope() {
+  scope.draw();
+  if (gpu) {
+    axes.draw(gpu.pad, gpu.window(), gpu.unit, eng,
+              gpu.count < 2 ? 'route a probe and run a transient' : null);
+  }
+}
+const bode = new BodePlotter(document.getElementById('bode'), 'bode');
+const meter = new Meter(document.getElementById('meter'), 'meter');
+const INSTRUMENTS = [
+  { id: 'scope', short: 'SC' },
+  { id: 'bode', short: 'BO' },
+  { id: 'meter', short: 'MT' },
+];
+let bodeView = 'mag';
+
+let zoom = 1;
+function resize() {
+  const r = sheet.parentElement.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  sheet.width = Math.max(1, Math.round(r.width * dpr));
+  sheet.height = Math.max(1, Math.round(r.height * dpr));
+  renderer.scale = dpr * zoom;
+  renderer.ox = sheet.width / 2;
+  renderer.oy = sheet.height / 2;
+  editor.draw();
+  drawScope();
+  bode.draw(bodeView);
+}
+addEventListener('resize', resize);
+
+// ---- Theme -----------------------------------------------------------------
+//
+// Dark is the default and light is opt-in; see the note on :root[data-theme].
+// The canvas palette in render.js and the CSS custom properties are two halves
+// of one theme and must be switched together — changing only the CSS leaves a
+// dark schematic sitting on a white page.
+const themeBtn = document.getElementById('theme');
+// Declared here, not beside drawSweep: applyTheme runs during setup, long
+// before that code, and a `let` in the temporal dead zone would throw.
+let lastSweep = null;
+
+function applyTheme(name, persist) {
+  const key = setTheme(name);
+  document.documentElement.dataset.theme = key;
+  themeBtn.innerHTML = `Theme <small>${key}</small>`;
+  if (persist) {
+    try { localStorage.setItem('spicelab.theme', key); } catch (e) { /* private mode */ }
+  }
+  resize();
+  if (lastSweep) drawSweep(...lastSweep);
+}
+
+themeBtn.onclick = () => {
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light', true);
+};
+
+// Sync the JS palette to whatever the pre-paint script already put on <html>.
+applyTheme(document.documentElement.dataset.theme || 'dark', false);
+
+sheet.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = sheet.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  const sx = (e.clientX - r.left) * dpr;
+  const sy = (e.clientY - r.top) * dpr;
+  const before = renderer.toDoc(sx, sy);
+  zoom = Math.min(4, Math.max(0.25, zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  renderer.scale = dpr * zoom;
+  const after = renderer.toDoc(sx, sy);
+  renderer.ox += (after.x - before.x) * renderer.scale;
+  renderer.oy += (after.y - before.y) * renderer.scale;
+  editor.draw();
+}, { passive: false });
+
+// ---------------------------------------------------------------- example
+function exampleRC() {
+  const s = new Schematic();
+  s.add('vsource', -160, 0, { ref: 'V1', value: 'DC 0 AC 1 PULSE(0 1 0 1p 1p 1 0)' });
+  s.add('resistor', 0, -60, { ref: 'R1', value: '1k', rot: 90 });
+  s.add('capacitor', 80, 0, { ref: 'C1', value: '1u' });
+  s.add('ground', -160, 60);
+  s.wire(-160, -20, -160, -60);
+  s.wire(-160, -60, -20, -60);
+  s.wire(20, -60, 80, -60);
+  s.wire(80, -60, 80, -20);
+  s.wire(80, 20, 80, 60);
+  s.wire(80, 60, -160, 60);
+  s.wire(-160, 60, -160, 20);
+  s.label(80, -60, 'OUT');
+  s.label(-160, -60, 'IN');
+  return s;
+}
+
+// ---------------------------------------------------------------- probes
+editor.onProbePick = (x, y) => {
+  const nets = extractNets(editor.sch);
+  const net = netAt(editor.sch, nets, x, y);
+  if (!net) { status('no net at that point — click on a wire or a pin'); return; }
+  const p = probes.add(new Probe({
+    kind: ProbeKind.VOLTAGE,
+    target: net.name,
+    // A slot, not a colour: resolved against the active theme at draw time.
+    colorIndex: probes.probes.length,
+    at: { x, y },
+  }));
+  // A new probe is most often wanted on the scope, so route it there by
+  // default; everything else stays opt-in.
+  probes.route('scope', p.id);
+  status(`probing ${net.name}`);
+};
+
+function renderProbes() {
+  const el = document.getElementById('probes');
+  editor.probes = probes.probes;
+  if (!probes.probes.length) {
+    el.innerHTML = '<small class="muted">probe tool (P), then click a wire</small>';
+    editor.draw();
+    return;
+  }
+  el.innerHTML = '';
+  // `pi`, not `i`: the instrument map below binds `i` to an instrument.
+  for (const [pi, p] of probes.probes.entries()) {
+    const row = document.createElement('div');
+    row.className = 'probe';
+    row.innerHTML =
+      `<span class="sw" style="background:${probeColor(p, pi)}"></span>
+       <span class="nm">${p.label}</span>
+       <span class="rt">${INSTRUMENTS.map((i) =>
+         `<button data-r="${i.id}" data-p="${p.id}"
+            class="${probes.isRouted(i.id, p.id) ? 'on' : ''}">${i.short}</button>`,
+       ).join('')}</span>
+       <button class="x" data-x="${p.id}">×</button>`;
+    el.appendChild(row);
+  }
+  for (const b of el.querySelectorAll('[data-r]')) {
+    b.onclick = () => {
+      probes.route(b.dataset.r, b.dataset.p, !probes.isRouted(b.dataset.r, b.dataset.p));
+    };
+  }
+  for (const b of el.querySelectorAll('[data-x]')) {
+    b.onclick = () => probes.remove(b.dataset.x);
+  }
+  editor.draw();
+}
+probes.onChange(renderProbes);
+
+// ---------------------------------------------------------------- panels
+let current = { netlist: '', ok: false };
+
+function refresh() {
+  const built = toNetlist(editor.sch, { title: 'spicelab schematic' });
+  current = built;
+  editor.issues = built.issues;
+  document.getElementById('netlist').textContent = built.netlist;
+
+  const erc = document.getElementById('erc');
+  erc.innerHTML = built.issues.length
+    ? built.issues.map((i) =>
+        `<div class="issue ${i.severity}">${i.message}</div>`).join('')
+    : '<div class="issue none">No issues.</div>';
+
+  const props = document.getElementById('props');
+  const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
+  if (sel.length !== 1) {
+    props.innerHTML = `<small class="muted">${
+      sel.length ? sel.length + ' selected' : 'nothing selected'}</small>`;
+  } else {
+    const c = sel[0];
+    const parts = partsFor(c.type);
+    let html = `<label>Reference</label><input id="p-ref" value="${c.ref}">`;
+    // Enable/disable applies to parts and analyses alike — the whole reason the
+    // flag lives on the component. "Try it without R3" and "try it without the
+    // AC sweep" are the same operation.
+    html += `<label class="check"><input type="checkbox" id="p-en"${
+      c.enabled === false ? '' : ' checked'}> enabled</label>`;
+    if (SYMBOLS[c.type].directive) {
+      // Declared parameters drive the editor, so it cannot drift from the card
+      // the emitter builds out of the same list.
+      html += paramFields(c);
+      const card = (() => {
+        try { return SYMBOLS[c.type].card(c.props); } catch { return '?'; }
+      })();
+      // Previewing a whole pasted macromodel would fill the panel; a line count
+      // is the useful summary there.
+      if (card.includes('\n')) {
+        html += `<div class="note">${card.split('\n').length} lines emitted verbatim</div>`;
+      } else if (card) {
+        html += `<div class="note">emits <code>${esc(card)}</code></div>`;
+      }
+    } else if (c.type === 'subckt') {
+      html += paramFields(c);
+      html += `<div class="note">Pin order must match the <code>.subckt</code> ` +
+              `line — it is the netlist contract, like a transistor's terminals.</div>`;
+    } else if (parts.length) {
+      // Semiconductors get a part picker instead of a value box: their
+      // behaviour comes from a .model card, not a number.
+      const cur = c.props.part ?? defaultPartFor(c.type)?.id;
+      html += `<label>Part</label><select id="p-part">${parts.map((p) =>
+        `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${p.label}</option>`,
+      ).join('')}</select>`;
+      const note = getPart(cur)?.note;
+      if (note) html += `<div class="note">${note}</div>`;
+    } else {
+      html += `<label>Value</label><input id="p-val" value="${c.value ?? ''}">`;
+    }
+    props.innerHTML = html;
+    document.getElementById('p-ref').onchange = (e) => editor.setRef(c.id, e.target.value);
+    document.getElementById('p-en').onchange = (e) => {
+      editor.commit();
+      c.enabled = e.target.checked;
+      editor._changed();
+    };
+    for (const el of props.querySelectorAll('[data-pk]')) {
+      el.onchange = (ev) => {
+        editor.commit();
+        c.props = { ...c.props, [el.dataset.pk]: ev.target.value };
+        editor._changed();
+      };
+    }
+    document.getElementById('p-val')?.addEventListener('change',
+      (e) => editor.setValue(c.id, e.target.value));
+    document.getElementById('p-part')?.addEventListener('change', (e) => {
+      editor.commit();
+      c.props = { ...c.props, part: e.target.value };
+      editor._changed();
+    });
+  }
+}
+editor.onChange(refresh);
+
+// ---------------------------------------------------------------- toolbar
+for (const b of document.querySelectorAll('[data-tool]')) {
+  b.onclick = () => { editor.setTool(b.dataset.tool); markTool(b); };
+}
+for (const b of document.querySelectorAll('[data-place]')) {
+  b.onclick = () => { editor.setTool('place', b.dataset.place); markTool(b); };
+}
+function markTool(active) {
+  for (const b of document.querySelectorAll('#palette button')) b.classList.remove('on');
+  active?.classList.add('on');
+}
+addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.key === 'p' || e.key === 'P') {
+    editor.setTool('probe');
+    markTool(document.querySelector('[data-tool="probe"]'));
+  }
+});
+document.getElementById('rotate').onclick = () => editor.rotateSelection(90);
+document.getElementById('mirror').onclick = () => editor.mirrorSelection();
+document.getElementById('del').onclick = () => editor.deleteSelection();
+document.getElementById('undo').onclick = () => editor.undo();
+document.getElementById('redo').onclick = () => editor.redo();
+document.getElementById('example').onclick = () => {
+  editor.load(exampleRC().toJSON());
+  status('example loaded');
+};
+document.getElementById('save').onclick = () => {
+  // Probes are part of the document: a saved design keeps its instrumentation.
+  const doc = { ...editor.sch.toJSON(), probes: probes.toJSON() };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)],
+                                        { type: 'application/json' }));
+  a.download = 'schematic.json';
+  a.click();
+};
+document.getElementById('open').onclick = () => {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.json';
+  inp.onchange = async () => {
+    const doc = JSON.parse(await inp.files[0].text());
+    editor.load(doc);
+    if (doc.probes) {
+      const loaded = ProbeSet.fromJSON(doc.probes);
+      probes.probes = loaded.probes;
+      probes.routes = loaded.routes;
+      renderProbes();
+    }
+    status('opened ' + inp.files[0].name);
+  };
+  inp.click();
+};
+
+// ---------------------------------------------------------------- simulate
+let client = null;
+async function sim() {
+  if (!client) { status('starting solver…'); client = await SimClient.create(); }
+  return client;
+}
+function suffix(v) {
+  const m = /^([-+0-9.eE]+)\s*(meg|mil|[tgkmunpf])?/i.exec(String(v).trim());
+  if (!m) return NaN;
+  const mult = { t: 1e12, g: 1e9, meg: 1e6, k: 1e3, m: 1e-3, mil: 25.4e-6,
+                 u: 1e-6, n: 1e-9, p: 1e-12, f: 1e-15 };
+  return parseFloat(m[1]) * (mult[(m[2] ?? '').toLowerCase()] ?? 1);
+}
+function guard() {
+  if (!current.ok) { status('fix the ERC errors first'); return false; }
+  return true;
+}
+function warnUnresolved(bad) {
+  if (bad.length) {
+    status(`probe problem: ${bad.map((b) => `${b.probe.label} — ${b.reason}`).join('; ')}`);
+  }
+}
+
+/**
+ * The enabled analysis block of a given kind, if one is on the canvas.
+ *
+ * A placed block is the source of truth when present; the panel inputs are the
+ * fallback for schematics that do not carry their own. Which one supplied the
+ * parameters is reported, because silently preferring one over the other is
+ * how you end up editing a number that has no effect.
+ */
+const esc = (t) => String(t).replace(/[&<>"]/g,
+  (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+/**
+ * Property inputs from the symbol's declared `params`.
+ *
+ * One declaration feeds this, the ERC check and the emitted card, so the dialog
+ * cannot drift from the netlist.
+ */
+function paramFields(c) {
+  let html = '';
+  for (const d of SYMBOLS[c.type].params ?? []) {
+    const v = c.props[d.key] ?? '';
+    html += `<label>${d.key}</label>`;
+    if (d.multiline) html += `<textarea data-pk="${d.key}" rows="8">${esc(v)}</textarea>`;
+    else if (d.choices) {
+      html += `<select data-pk="${d.key}">${d.choices.map((o) =>
+        `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    } else html += `<input data-pk="${d.key}" value="${esc(v)}">`;
+  }
+  return html;
+}
+
+// ---------------------------------------------------------- model libraries
+//
+// Links rather than a bundled library, because almost every large collection is
+// aggregated vendor material: free to download and use, not ours to ship. See
+// the note at the top of libraries.js.
+{
+  const body = document.getElementById('libs-body');
+  const row = (s) => `<div class="lib">
+      <a href="${s.url}" target="_blank" rel="noopener noreferrer">${esc(s.name)}</a>
+      <span class="lic ${s.licence}">${esc(LICENCE_NOTE[s.licence])}${
+        s.verified ? '' : ' (unverified)'}</span>
+      <div class="what">${esc(s.what)}</div>
+      ${s.note ? `<div class="what">${esc(s.note)}</div>` : ''}
+    </div>`;
+  body.innerHTML =
+    `<div class="what" style="margin:.3rem 0">A browser has no filesystem, so
+     <code>.include</code> cannot reach a downloaded file. Use
+     <b>Import model file…</b>, or paste the text into a
+     <b>SPICE text</b> block and instantiate it with a <b>Subcircuit</b>.
+     Imported files are read locally and never uploaded.</div>` +
+    '<h2>Models</h2>' + MODEL_SOURCES.map(row).join('') +
+    '<h2>Circuits</h2>' + CIRCUIT_SOURCES.map(row).join('');
+}
+
+/**
+ * Load a local model file onto the canvas as a SPICE text block.
+ *
+ * Read with FileReader, so it never leaves the machine — which is also what
+ * keeps the licensing simple: the vendor's file stays the user's copy.
+ */
+document.getElementById('import-model').onclick = () =>
+  document.getElementById('model-file').click();
+
+document.getElementById('model-file').onchange = async (ev) => {
+  const file = ev.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    editor.commit();
+    // Placed BELOW whatever is already drawn. Dropping it at the origin puts a
+    // large text block straight on top of the circuit, which is what the first
+    // version did.
+    const ys = editor.sch.components.map((k) => k.y);
+    const xs = editor.sch.components.map((k) => k.x);
+    const x = xs.length ? Math.min(...xs) : 0;
+    const y = ys.length ? Math.max(...ys) + 80 : 0;
+    const c = editor.sch.add('spice', x, y, { props: { text: text.trim() } });
+    c.ref = file.name.replace(/\.[^.]+$/, '').slice(0, 24) || c.ref;
+    editor._changed();
+    const subs = [...text.matchAll(/^\s*\.subckt\s+(\S+)([^\n]*)/gim)];
+    status(subs.length
+      ? `imported ${file.name} — defines ${subs.length} subcircuit(s): ` +
+        subs.slice(0, 3).map((m) => m[1]).join(', ') +
+        '. Place a Subcircuit block and name one.'
+      : `imported ${file.name} (${text.split('\n').length} lines)`);
+  } catch (e) {
+    status('import failed: ' + e.message);
+  } finally {
+    ev.target.value = '';
+  }
+};
+
+function placedAnalysis(type) {
+  return editor.sch.components.find((c) => c.type === type && c.enabled !== false) ?? null;
+}
+
+document.getElementById('run-op').onclick = async () => {
+  if (!guard()) return;
+  try {
+    const c = await sim();
+    // `current.netlist` already ends with `.end`; appending another was
+    // harmless but meant anything added after it was silently ignored.
+    const info = await c.load(current.netlist);
+    showEngine(c);
+    const x = await c.op();
+    meter.show(probes, info.labels, x);
+    status('operating point solved');
+  } catch (e) { status('error: ' + e.message); }
+};
+
+document.getElementById('run-tran').onclick = async () => {
+  if (!guard()) return;
+  try {
+    const block = placedAnalysis('tran');
+    const tstop = suffix(block ? block.props.tstop : document.getElementById('tstop').value);
+    const tstep = suffix(block ? block.props.tstep : document.getElementById('tstep').value);
+    const from = block ? `${block.ref} on the canvas` : 'the panel';
+    const c = await sim();
+    const info = await c.load(current.netlist);
+    showEngine(c);
+    warnUnresolved(scope.begin(probes, info.labels));
+    status('running…');
+    const t0 = performance.now();
+    const stats = await c.tran(
+      { tstop, tstep, tmax: tstep / 2, method: 'trap' },
+      (view, n, stride) => { scope.push(view, n, stride); drawScope(); },
+    );
+    drawScope();
+    status(`transient (${from}): ${scope.times.length} points, ` +
+           `${stats.accepted} accepted, ${stats.rejected} rejected, ` +
+           `${(performance.now() - t0).toFixed(0)} ms`);
+  } catch (e) { status('error: ' + e.message); }
+};
+
+document.getElementById('run-ac').onclick = async () => {
+  if (!guard()) return;
+  try {
+    const block = placedAnalysis('ac');
+    const spec = block
+      ? { scale: block.props.scale, points: Number(block.props.points),
+          start: suffix(block.props.start), stop: suffix(block.props.stop) }
+      : { scale: 'dec', points: 30, start: 1, stop: 1e6 };
+    const c = await sim();
+    const info = await c.load(current.netlist);
+    showEngine(c);
+    const res = await c.ac(spec);
+    warnUnresolved(bode.load(probes, info.labels, res));
+    bode.draw(bodeView);
+    status(`AC sweep (${block ? block.ref + ' on the canvas' : 'the panel'}): ` +
+           `${res.points} points, ${spec.start} Hz to ${spec.stop} Hz`);
+  } catch (e) { status('error: ' + e.message); }
+};
+
+// ---------------------------------------------------------------- sweep
+let batch = null;
+
+/**
+ * Sweep a component's value.
+ *
+ * Each case gets its own netlist, re-emitted from the schematic with the value
+ * substituted. That is deliberately NOT a regex over the netlist text: a
+ * pattern loose enough to match a value is also loose enough to match a comment
+ * or a model card, and the resulting sweep would be a smooth curve of wrong
+ * numbers.
+ */
+async function runSweep() {
+  const ref = document.getElementById('sw-ref').value.trim();
+  const from = suffix(document.getElementById('sw-from').value);
+  const to = suffix(document.getElementById('sw-to').value);
+  const n = Math.max(2, parseInt(document.getElementById('sw-n').value, 10) || 20);
+  const sweepStatus = (m) => (document.getElementById('sweep-status').textContent = m);
+
+  const comp = editor.sch.components.find(
+    (c) => c.ref.toLowerCase() === ref.toLowerCase());
+  if (!comp) { sweepStatus(`no component "${ref}"`); return; }
+
+  // Use the LAST probe: in practice that is the output, and a sweep of the
+  // input against its own driver is never interesting.
+  const probe = probes.probes[probes.probes.length - 1];
+  if (!probe) { sweepStatus('add a probe first'); return; }
+
+  if (!batch) { sweepStatus('starting workers…'); batch = await BatchRunner.create(); }
+
+  const saved = comp.value;
+  const values = [];
+  const cases = [];
+  for (let i = 0; i < n; i++) {
+    const v = from * (to / from) ** (i / (n - 1));   // log sweep
+    comp.value = String(v);
+    values.push(v);
+    cases.push({
+      netlist: toNetlist(editor.sch, { title: 'sweep' }).netlist,
+      // AC bandwidth rather than an operating point: a DC sweep of an RC says
+      // nothing (every node sits at the source value regardless of R), whereas
+      // the -3 dB corner moves as 1/RC and is what you actually want to see.
+      analysis: { type: 'ac', scale: 'dec', points: 25, start: 1, stop: 1e7 },
+      measures: [{ name: 'y', probe: probe.target, measure: 'bw3db' }],
+    });
+  }
+  comp.value = saved;
+
+  const t0 = performance.now();
+  const results = await batch.run(cases, (d, t) => sweepStatus(`${d}/${t}`));
+  const ms = (performance.now() - t0).toFixed(0);
+  const ys = results.map((r) => (r.ok ? r.values.y : NaN));
+  const okCount = results.filter((r) => r.ok).length;
+  sweepStatus(`${okCount}/${n} in ${ms} ms`);
+  drawSweep(values, ys, ref, `f-3dB of ${probe.label}`, probeColor(probe));
+}
+
+function drawSweep(xs, ys, ref, label, color) {
+  lastSweep = [xs, ys, ref, label, color];
+  const cv = document.getElementById('sweep-plot');
+  const r = cv.getBoundingClientRect();
+  const d = devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(r.width * d));
+  cv.height = Math.max(1, Math.round(r.height * d));
+  const g = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  g.fillStyle = COLORS.plotBg; g.fillRect(0, 0, w, h);
+
+  const good = ys.filter(Number.isFinite);
+  if (!good.length) return;
+  let lo = Math.min(...good), hi = Math.max(...good);
+  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }
+  const p = (hi - lo) * 0.08;
+  hi += p;
+  // Don't pad a strictly-positive quantity below zero: a frequency axis
+  // labelled -120 Hz is nonsense even as headroom.
+  lo = good.every((v) => v >= 0) ? Math.max(0, lo - p) : lo - p;
+  const L = 56 * d, R = 8 * d, T = 8 * d, B = 20 * d;
+  const lx0 = Math.log10(xs[0]), lx1 = Math.log10(xs[xs.length - 1]);
+  const X = (x) => L + ((Math.log10(x) - lx0) / (lx1 - lx0 || 1)) * (w - L - R);
+  const Y = (y) => h - B - ((y - lo) / (hi - lo)) * (h - B - T);
+
+  g.strokeStyle = COLORS.plotGrid; g.lineWidth = d;
+  g.beginPath();
+  for (let i = 0; i <= 4; i++) { const y = T + i * (h - B - T) / 4; g.moveTo(L, y); g.lineTo(w - R, y); }
+  g.stroke();
+  g.strokeStyle = COLORS.plotAxis;
+  g.beginPath(); g.moveTo(L, T); g.lineTo(L, h - B); g.lineTo(w - R, h - B); g.stroke();
+
+  g.strokeStyle = color ?? SERIES[0]; g.lineWidth = 1.6 * d;
+  g.beginPath();
+  let started = false;
+  for (let i = 0; i < xs.length; i++) {
+    if (!Number.isFinite(ys[i])) { started = false; continue; }
+    const px = X(xs[i]), py = Y(ys[i]);
+    if (started) g.lineTo(px, py); else { g.moveTo(px, py); started = true; }
+  }
+  g.stroke();
+
+  g.fillStyle = COLORS.plotText;
+  g.font = `${10 * d}px ui-monospace, Menlo, monospace`;
+  g.textAlign = 'right';
+  g.fillText(eng(hi, '', 3), L - 5 * d, T + 8 * d);
+  g.fillText(eng(lo, '', 3), L - 5 * d, h - B);
+  g.textAlign = 'left';
+  g.fillText(`${ref} = ${eng(xs[0], '', 2)}`, L, h - 5 * d);
+  g.textAlign = 'right';
+  g.fillText(eng(xs[xs.length - 1], '', 2), w - R, h - 5 * d);
+  g.textAlign = 'left';
+  g.fillStyle = color ?? SERIES[0];
+  g.fillText(label, L + 6 * d, T + 10 * d);
+}
+
+document.getElementById('run-sweep').onclick = () => runSweep();
+
+// Bode magnitude/phase toggle.
+const tabs = document.getElementById('bode-tabs');
+for (const v of ['mag', 'phase']) {
+  const b = document.createElement('button');
+  b.textContent = v;
+  b.className = v === bodeView ? 'on' : '';
+  b.onclick = () => {
+    bodeView = v;
+    for (const o of tabs.children) o.classList.toggle('on', o.textContent === v);
+    bode.draw(bodeView);
+  };
+  tabs.appendChild(b);
+}
+
+// ---------------------------------------------------------------- boot
+editor.sch = exampleRC();
+resize();
+refresh();
+renderProbes();
+drawScope();
+bode.draw(bodeView);
+status('ready — P then click a wire to probe, W to wire, R to rotate.');
+
+globalThis.__spicelab = { editor, renderer, probes, scope, bode, gpu,
+                          runSweep, get current() { return current; } };
+</script>

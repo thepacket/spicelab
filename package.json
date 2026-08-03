@@ -1,0 +1,29 @@
+{
+  "name": "spicelab",
+  "version": "0.1.0",
+  "description": "Browser-based analog circuit simulator with interactive real-time solving",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "./scripts/build-wasm.sh",
+    "test": "npm run test:js && npm run test:ring && npm run test:stream && npm run test:engines && npm run test:ngspice-engine && npm run test:schematic && npm run test:probes && npm run test:batch && npm run test:corpus && npm run test:ngspice && npm run test:rust",
+    "test:js": "node tests/analytic.test.mjs",
+    "test:ring": "node tests/ring.test.mjs",
+    "test:stream": "node tests/stream.test.mjs",
+    "test:rust": "cargo test -p spicelab-core",
+    "fixtures": "node tests/make-fixtures.mjs",
+    "dev": "node scripts/dev-server.mjs",
+    "test:schematic": "node tests/schematic.test.mjs",
+    "test:probes": "node tests/probes.test.mjs",
+    "test:batch": "node tests/batch.test.mjs",
+    "test:ngspice": "node tests/ngspice-diff.test.mjs",
+    "test:engines": "node tests/engines.test.mjs",
+    "build:ngspice": "bash scripts/build-ngspice.sh",
+    "test:ngspice-engine": "node tests/ngspice-engine.test.mjs",
+    "test:corpus": "node tests/corpus.test.mjs"
+  },
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thepacket/spicelab.git"
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "spicelab-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "SPICE-class analog circuit simulation core. No wasm dependencies."
+
+# Deliberately dependency-free: the numerics must be testable and benchmarkable
+# natively. serde_json is dev-only, for the golden-fixture differential tests.
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"

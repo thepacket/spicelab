@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SpiceLab — worker + ring smoke test</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin: 2rem; max-width: 60rem; color: #111; background: #fff; }
+  h1 { font-size: 1.1rem; }
+  #log { white-space: pre-wrap; border: 1px solid #ccc; padding: .75rem;
+         min-height: 12rem; background: #fafafa; }
+  .ok { color: #0a0; } .bad { color: #c00; font-weight: 600; }
+  canvas { border: 1px solid #ccc; margin-top: 1rem; display: block; }
+</style>
+<h1>SpiceLab — end-to-end smoke test</h1>
+<p>Netlist &rarr; wasm solver on a worker &rarr; SharedArrayBuffer ring &rarr; this thread.</p>
+<div id="log">running…</div>
+<canvas id="plot" width="880" height="240"></canvas>
+<script type="module">
+import { SimClient } from '../src/worker/client.js';
+
+const log = document.getElementById('log');
+const out = [];
+const say = (s, cls = '') => {
+  out.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  log.innerHTML = out.join('\n');
+};
+const check = (name, cond, detail = '') =>
+  say(`${cond ? '[pass]' : '[FAIL]'} ${name}${detail ? ' — ' + detail : ''}`,
+      cond ? 'ok' : 'bad');
+
+const R = 1000, C = 1e-6, tau = R * C;
+const netlist = `RC step
+V1 in 0 DC 0 PULSE(0 1 0 1p 1p 1 0)
+R1 in out ${R}
+C1 out 0 ${C}
+.end`;
+
+try {
+  check('crossOriginIsolated', self.crossOriginIsolated === true,
+        `got ${self.crossOriginIsolated}`);
+  check('SharedArrayBuffer available', typeof SharedArrayBuffer === 'function');
+
+  const client = await SimClient.create();
+  say('worker ready, wasm instantiated', 'ok');
+
+  const info = await client.load(netlist);
+  check('compiled netlist', info.numUnknowns === 3, `unknowns=${info.numUnknowns}`);
+  say(`labels: ${JSON.stringify(info.labels)}  stride=${info.stride}`);
+
+  const rows = [];
+  const stats = await client.tran(
+    { tstop: 5 * tau, tstep: tau / 100, tmax: tau / 50, method: 'trap' },
+    (view, n, stride) => {
+      for (let i = 0; i < n; i++) {
+        rows.push([view[i * stride], view[i * stride + 2]]); // [t, V(out)]
+      }
+    },
+  );
+
+  check('streamed a full run', rows.length > 100, `${rows.length} rows`);
+  check('reached tstop', Math.abs(rows.at(-1)[0] - 5 * tau) < tau / 20,
+        `t_end=${rows.at(-1)[0].toExponential(3)}`);
+  say(`accepted=${stats.accepted} rejected=${stats.rejected}`);
+
+  const at = (t) => rows.reduce((b, r) =>
+    Math.abs(r[0] - t) < Math.abs(b[0] - t) ? r : b, rows[0]);
+  for (const k of [1, 2, 3]) {
+    const got = at(k * tau)[1], want = 1 - Math.exp(-k);
+    check(`V(out) at ${k}tau = 1-e^-${k}`, Math.abs(got - want) < 3e-3,
+          `${got.toFixed(6)} vs ${want.toFixed(6)}`);
+  }
+
+  // Plot it, so a wrong waveform is visible and not just a passing number.
+  const cv = document.getElementById('plot'), g = cv.getContext('2d');
+  g.strokeStyle = '#08f'; g.lineWidth = 2; g.beginPath();
+  rows.forEach(([t, v], i) => {
+    const x = (t / (5 * tau)) * (cv.width - 20) + 10;
+    const y = cv.height - 20 - v * (cv.height - 40);
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+
+  const failed = out.filter((s) => s.includes('[FAIL]')).length;
+  say(`\n${failed === 0 ? 'ALL CHECKS PASSED' : failed + ' CHECK(S) FAILED'}`,
+      failed === 0 ? 'ok' : 'bad');
+  document.title = failed === 0 ? 'PASS' : 'FAIL';
+} catch (e) {
+  say(`ERROR: ${e?.message ?? e}`, 'bad');
+  document.title = 'FAIL';
+}
+</script>
