@@ -23,7 +23,7 @@ architecture.
 |  | SpiceLab core | ngspice 46 |
 |---|---|---|
 | Role | interactive | coverage |
-| Devices | 13 kinds, MOSFET levels 1 and 3 | everything ngspice has |
+| Devices | 13 kinds, MOSFET levels 1 and 3 | 59 implementations — BSIM, VBIC, HiSIM, VDMOS, JFET, transmission lines — minus the XSPICE code models |
 | Analyses | `.op` `.dc` `.ac` `.tran` `.tf` | the same set |
 | Value change re-solves in a frame | yes | no |
 | Size | ~430 KB, always loaded | ~4.9 MB, loaded only when needed |
@@ -114,9 +114,14 @@ that caught it. It is the most useful file in the repository.
 
 ## What it is not
 
-- **Not a replacement for ngspice or LTspice.** 13 device kinds in the
-  interactive core against their forty-odd. No BSIM; JFETs and power FETs are
-  placeable but run on the coverage engine.
+- **Not a replacement for ngspice or LTspice.** The interactive core has 13
+  device kinds — R, C, L, the four controlled sources, both independent
+  sources, a voltage-controlled switch, diode, Gummel-Poon BJT and MOSFET
+  (levels 1 and 3). ngspice ships **59** device implementations, and roughly
+  half of those are alternative MOSFET and BJT model families — BSIM, HiSIM,
+  VBIC, SOI, HFET — rather than different element types. **That is the real
+  gap: no BSIM, so no modern IC process work in the interactive core.** JFETs
+  and power FETs are placeable, but they route to the coverage engine.
 - **No bundled part library.** Vendor models are free to download and use but
   not ours to redistribute, so they are fetched into your browser rather than
   shipped here. Nothing is uploaded either way.

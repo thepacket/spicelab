@@ -976,7 +976,7 @@ They are **not interchangeable, and that is the design**:
 | Role | interactive | coverage |
 | Value change re-solves in a frame | yes — symbolic/numeric split | no |
 | Back-pressure reaches the solver | yes, via a row budget | yes, by BLOCKING in `SendData` |
-| Devices | 13 kinds, MOS levels 1 and 3 | everything ngspice has |
+| Devices | 13 kinds, MOS levels 1 and 3 | ngspice's 59 device implementations, MINUS the XSPICE code models (no `A` devices, no `POLY()`) |
 
 Because the difference is user-visible, which engine ran a design is REPORTED,
 not hidden. `select()` returns its reason.
