@@ -86,8 +86,8 @@ const CORPORA = [
     subdirs: ['Netlists'],
     pattern: /\.cir$/i,
     maxBytes: 3072,
-    // RAISED 150 -> 165 on 2026-08-04, the only time this has gone up, and the
-    // reason is recorded because the rule is otherwise "never raise".
+    // RAISED 150 -> 165 -> 180 on 2026-08-04, the only times this has gone up,
+    // and the reason is recorded because the rule is otherwise "never raise".
     //
     // Accepting `.measure` took `ok` from 1,202 to 1,439 — 237 more netlists
     // now parse to the end instead of stopping at their first measure card.
@@ -99,11 +99,21 @@ const CORPORA = [
     // (`specials_in_subckt_dot_param.cir` says so in its own header), and
     // `invalid` is the right answer there.
     //
+    // Accepting `.step` did the same thing again a few hours later: `ok`
+    // 1,439 -> 1,621, `invalid` 165 -> 180. Identical trade, identical reason.
+    //
+    // The pattern is worth naming: every directive this parser learns to
+    // ACCEPT moves netlists from "stopped early" to "parsed to the end", and
+    // some of those then reach a real gap further down. `ok` is the number
+    // that measures progress here; `invalid` measures how much further we can
+    // now see. Watch them together — a rise in `invalid` with `ok` flat WOULD
+    // be a regression, and this floor is what would catch it.
+    //
     // The remaining causes are a long tail: models that a missing `.include`
     // would have defined, mutual-inductance references, short `.tran` cards.
-    // Ratchet down from 165.
-    budget: 165,
-    minOk: 1400,
+    // Ratchet down from 180.
+    budget: 180,
+    minOk: 1600,
     hint: 'git clone --depth 1 https://github.com/Xyce/Xyce_Regression .xyce-regression',
   },
 ];

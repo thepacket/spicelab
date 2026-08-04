@@ -19,6 +19,7 @@
  * inside a browser worker and directly under Node in the tests.
  */
 import { Probe, ProbeKind } from '../instruments/probe.js';
+import { measureAll } from '../instruments/measure.js';
 
 /**
  * Splice parameter overrides into a netlist.
@@ -234,10 +235,73 @@ export function runCase(Session, memory, spec) {
       if (times.length > MAX_ROWS) break;
     }
     const flat = Float64Array.from(rows);
+    const values = measureTran(measures, labels, times, flat, stride);
+
+    // `.measure` cards, evaluated HERE — in the worker that holds the rows.
+    //
+    // This is what makes `.step` compose with `.measure`, which is how both
+    // are actually used: sweep a parameter, extract a number per case, look at
+    // the number against the parameter. Running the cards on the main thread
+    // instead would mean shipping every case's full solution vector back, and
+    // the whole reason this pool exists is that it returns SCALARS.
+    if (spec.measureCards) {
+      const get = (name) => {
+        const col = labels.findIndex((l) => l.toLowerCase() === name.toLowerCase());
+        if (col < 0) return null;
+        const out = new Float64Array(times.length);
+        for (let r = 0; r < times.length; r++) out[r] = flat[r * stride + 1 + col];
+        return out;
+      };
+      for (const m of measureAll(spec.measureCards, { t: times, get })) {
+        // A failed measurement records NaN rather than being dropped: the
+        // caller plots one point per case, and a silently shorter array would
+        // shift every later point onto the wrong parameter value.
+        values[m.name] = m.error ? NaN : m.value;
+      }
+    }
+
+    // Optionally return ONE decimated waveform.
+    //
+    // This pool exists to return scalars — shipping every case's full solution
+    // vector back is exactly what it avoids. But `.step` is used far more often
+    // to draw a FAMILY OF CURVES than to tabulate a measurement (366 of 436
+    // corpus files carry `.step` with no `.measure` at all), and a family needs
+    // waveforms. So: one signal, decimated to a bounded point count. At 2,000
+    // points a curve is already finer than the pixels it lands on, and twenty
+    // cases cost ~320 KB rather than tens of megabytes.
+    //
+    // Decimation is by STRIDE over the samples, not by resampling onto a
+    // uniform grid: this is for looking at, and resampling here would quietly
+    // give the plot a different timebase from the numbers `.measure` computed
+    // from the same run.
+    let trace = null;
+    if (spec.trace?.signal) {
+      const col = labels.findIndex(
+        (l) => l.toLowerCase() === String(spec.trace.signal).toLowerCase());
+      if (col >= 0 && times.length) {
+        const max = Math.max(2, spec.trace.maxPoints ?? 2000);
+        const stepBy = Math.max(1, Math.ceil(times.length / max));
+        const n = Math.ceil(times.length / stepBy);
+        const t = new Float64Array(n);
+        const v = new Float64Array(n);
+        for (let k = 0, r = 0; r < times.length; r += stepBy, k++) {
+          t[k] = times[r];
+          v[k] = flat[r * stride + 1 + col];
+        }
+        // The final sample is kept regardless of where the stride lands, so
+        // every curve in a family ends at the same time rather than at a
+        // ragged edge that reads as the runs having different lengths.
+        t[n - 1] = times[times.length - 1];
+        v[n - 1] = flat[(times.length - 1) * stride + 1 + col];
+        trace = { t, v };
+      }
+    }
+
     return {
       ok: true,
-      values: measureTran(measures, labels, times, flat, stride),
+      values,
       points: times.length,
+      trace,
       overrides,
     };
   } catch (e) {

@@ -282,6 +282,14 @@
   </div>
   <canvas id="sweep-plot" class="instrument" style="height:130px"></canvas>
 
+  <!-- `.step`: the same analysis rerun per parameter value. Its own plot,
+       because a family of curves and a scalar-versus-parameter curve are
+       different pictures and overlaying them would read as one. -->
+  <h2>.step <span id="step-status" class="badge"></span></h2>
+  <div class="row"><button id="run-step">Run .step</button></div>
+  <canvas id="step-plot" class="instrument" style="height:150px"></canvas>
+  <pre id="step-out" style="display:none"></pre>
+
   <h2>Model libraries</h2>
   <div class="row">
     <button id="import-model">Import model file…</button>
@@ -330,6 +338,7 @@ import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
 import { probeColor } from '../src/instruments/probe.js';
 import { fourier } from '../src/instruments/fourier.js';
 import { measureAll, signalsIn } from '../src/instruments/measure.js';
+import { parseSteps, withoutSteps } from '../src/instruments/step.js';
 import { MODEL_SOURCES, CIRCUIT_SOURCES, LICENCE_NOTE } from '../src/schematic/libraries.js';
 import { Editor } from '../src/schematic/editor.js';
 import { toNetlist } from '../src/schematic/emit.js';
@@ -1471,6 +1480,155 @@ document.getElementById('run-tf').onclick = async () => {
   } catch (e) { status('error: ' + e.message); }
 };
 
+/**
+ * `.step` — rerun the analysis once per parameter value.
+ *
+ * Not a new analysis: the batch worker pool already reruns a netlist with a
+ * `.param` override per case, which is exactly what `.step` means. This wires
+ * the card to that pool and draws the result.
+ *
+ * It draws a FAMILY OF CURVES, because that is overwhelmingly how the
+ * directive is used — 366 of the 436 `.step` files in the Xyce corpus carry no
+ * `.measure` at all. When measure cards ARE present their values are tabulated
+ * per case alongside, which covers the other 70.
+ *
+ * The family is drawn on its own canvas rather than in the oscilloscope. The
+ * scope shares one x buffer across its traces (every unknown of a single run
+ * has the same timestamps), and a family does not: each case has its own
+ * adaptive timestep. Overlaying them there would need a per-trace x, which is
+ * a real change to the renderer and not one to make in passing.
+ */
+async function runStep() {
+  const stepStatus = (m) => (document.getElementById('step-status').textContent = m);
+  const out = document.getElementById('step-out');
+  out.style.display = 'none';
+
+  const specs = parseSteps(current.netlist);
+  if (!specs.length) { stepStatus('no .step card'); return; }
+  const bad = specs.find((sp) => sp.error);
+  if (bad) { stepStatus(bad.error); status('.step: ' + bad.error); return; }
+  const spec = specs[0];
+
+  const block = placedAnalysis('tran');
+  const tstop = suffix(block ? block.props.tstop : document.getElementById('tstop').value);
+  const tstep = suffix(block ? block.props.tstep : document.getElementById('tstep').value);
+
+  // The last probe, the same convention the value sweep above uses: in
+  // practice it is the output, and stepping a parameter to watch the input is
+  // never the question being asked.
+  const probe = probes.probes[probes.probes.length - 1];
+  if (!probe) { stepStatus('add a probe first'); return; }
+
+  if (!batch) { stepStatus('starting workers…'); batch = await BatchRunner.create(); }
+
+  // The card is stripped from each case, so a case cannot ask to sweep itself.
+  const base = withoutSteps(current.netlist);
+  const cards = current.netlist.match(/^[ \t]*\.meas(?:ure)?\b.*$/gim) ?? [];
+  const cases = spec.values.map((v) => ({
+    netlist: base,
+    overrides: { [spec.param]: v },
+    analysis: { type: 'tran', tstop, tstep, tmax: tstep / 2, method: 'trap' },
+    measures: [],
+    measureCards: cards.join('\n'),
+    trace: { signal: probe.target, maxPoints: 2000 },
+  }));
+
+  const t0 = performance.now();
+  const results = await batch.run(cases, (d, n) => stepStatus(`${d}/${n}`));
+  const ms = (performance.now() - t0).toFixed(0);
+  const okCount = results.filter((r) => r.ok).length;
+  stepStatus(`${okCount}/${cases.length} in ${ms} ms`);
+
+  drawStepFamily(spec, results, probe);
+
+  // Measurements per case, when the netlist asks for any.
+  const names = [...new Set(results.flatMap(
+    (r) => (r.ok ? Object.keys(r.values ?? {}) : [])))];
+  if (names.length) {
+    out.style.display = '';
+    const head = `${spec.param.padEnd(12)}${names.map((n) => n.padStart(14)).join('')}`;
+    const rows = spec.values.map((v, i) => {
+      const r = results[i];
+      const cells = names.map((n) => {
+        const x = r?.ok ? r.values[n] : NaN;
+        return (Number.isFinite(x) ? eng(x, '') : '—').padStart(14);
+      }).join('');
+      return `${eng(v, '').padEnd(12)}${cells}`;
+    });
+    out.textContent = [head, ...rows].join('\n');
+  }
+  status(`.step ${spec.param}: ${okCount}/${cases.length} cases, ${ms} ms`);
+}
+
+/** One curve per case, coloured light-to-dark across the swept range. */
+function drawStepFamily(spec, results, probe) {
+  const cv = document.getElementById('step-plot');
+  const r = cv.getBoundingClientRect();
+  const d = devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(r.width * d));
+  cv.height = Math.max(1, Math.round(r.height * d));
+  const g = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  const padL = 54 * d, padR = 8 * d, padT = 8 * d, padB = 22 * d;
+  g.fillStyle = COLORS.plotBg;
+  g.fillRect(0, 0, w, h);
+
+  const traces = results.map((x) => (x?.ok ? x.trace : null)).filter(Boolean);
+  g.font = `${11 * d}px ui-monospace, monospace`;
+  if (!traces.length) {
+    g.fillStyle = COLORS.plotText;
+    g.textAlign = 'center';
+    g.fillText('no case produced a waveform', w / 2, h / 2);
+    return;
+  }
+
+  let t1 = -Infinity, lo = Infinity, hi = -Infinity;
+  for (const tr of traces) {
+    t1 = Math.max(t1, tr.t[tr.t.length - 1]);
+    for (const v of tr.v) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  }
+  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }
+  const pad = (hi - lo) * 0.05;
+  lo -= pad; hi += pad;
+
+  const X = (t) => padL + (t / (t1 || 1)) * (w - padL - padR);
+  const Y = (v) => h - padB - ((v - lo) / (hi - lo)) * (h - padT - padB);
+
+  g.strokeStyle = COLORS.plotAxis;
+  g.beginPath();
+  g.moveTo(padL, padT); g.lineTo(padL, h - padB); g.lineTo(w - padR, h - padB);
+  g.stroke();
+
+  g.lineWidth = 1.4 * d;
+  traces.forEach((tr, i) => {
+    // Opacity carries the step VALUE, so which curve is which is readable
+    // without a legend that would not fit. Later cases are drawn brighter.
+    const a = traces.length > 1 ? 0.35 + 0.65 * (i / (traces.length - 1)) : 1;
+    g.globalAlpha = a;
+    g.strokeStyle = probeColor(probe);
+    g.beginPath();
+    for (let k = 0; k < tr.t.length; k++) {
+      const x = X(tr.t[k]), y = Y(tr.v[k]);
+      if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  });
+  g.globalAlpha = 1;
+
+  g.fillStyle = COLORS.plotText;
+  g.textAlign = 'right';
+  g.fillText(eng(hi, 'V', 3), padL - 5 * d, padT + 10 * d);
+  g.fillText(eng(lo, 'V', 3), padL - 5 * d, h - padB - 2 * d);
+  g.textAlign = 'left';
+  g.fillText('0 s', padL, h - 6 * d);
+  g.textAlign = 'right';
+  g.fillText(eng(t1, 's', 3), w - padR, h - 6 * d);
+  g.textAlign = 'left';
+  g.fillText(`${probe.label} vs ${spec.param} ` +
+             `(${eng(spec.values[0], '')} .. ${eng(spec.values[spec.values.length - 1], '')})`,
+             padL + 4 * d, padT + 10 * d);
+}
+
 // ---------------------------------------------------------------- sweep
 let batch = null;
 
@@ -1585,6 +1743,10 @@ function drawSweep(xs, ys, ref, label, color) {
 }
 
 document.getElementById('run-sweep').onclick = () => runSweep();
+
+// `.step` runs from the card on the sheet, so it needs no inputs of its own —
+// the parameter, the range and the analysis all come from the netlist.
+document.getElementById('run-step').onclick = () => runStep();
 
 // Bode magnitude/phase toggle.
 const tabs = document.getElementById('bode-tabs');

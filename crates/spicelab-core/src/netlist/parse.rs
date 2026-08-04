@@ -679,7 +679,7 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
             }
             "ends" | "eom" | "end" | "title" | "probe" | "print" | "plot" | "width"
             | "temp" | "nodeset" | "ic" | "save" | "four" | "fourier" | "measure"
-            | "meas" => {
+            | "meas" | "step" => {
                 // Accepted and ignored: output/formatting directives that do not
                 // affect the solved circuit. Ignoring beats rejecting, because a
                 // vendor model file is full of them.
@@ -694,6 +694,12 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 // `.measure` is here for the same reason: it extracts a number
                 // from a COMPLETED run, and lives in
                 // `src/instruments/measure.js` so it serves either engine.
+                //
+                // `.step` likewise. It is not an analysis but a REPETITION of
+                // one, driven by the batch worker pool, which reruns the same
+                // netlist with a `.param` override per case. The card is read
+                // by `src/instruments/step.js`; the solver sees only the
+                // individual cases, each with the card stripped.
                 return Ok(());
             }
             other => {
