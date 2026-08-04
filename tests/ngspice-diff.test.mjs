@@ -508,9 +508,82 @@ Q1 c b 0 PM
               `worst BJT error ${worstQ.toExponential(2)}`);
 }
 
+console.log('\nTransistor-level digital');
+{
+  // Digital circuits built from MOSFETs are ordinary analog SPICE, and they are
+  // a good fit for this solver: small, fast, and the thing you want to drag a
+  // parameter on. They are also unusually SENSITIVE tests.
+  const MODELS = `.model NM NMOS (level=1 vto=0.7 kp=120u lambda=0.05 gamma=0.4 phi=0.7 tox=20n)
+.model PM PMOS (level=1 vto=-0.7 kp=40u lambda=0.05 gamma=0.4 phi=0.7 tox=20n)`;
+
+  // A CMOS inverter exercises BOTH polarities at once, across the full range
+  // from cutoff through saturation to linear. Every PMOS bug this project has
+  // had would show here as a shifted switching threshold.
+  const inv = (v) => `cmos inverter
+VDD vdd 0 DC 3.3
+VIN in 0 DC ${v}
+MN out in 0 0 NM w=2u l=0.5u
+MP out in vdd vdd PM w=6u l=0.5u
+${MODELS}`;
+  let worst = 0, worstAt = 0;
+  for (let v = 0; v <= 3.301; v += 0.15) {
+    const a = ourOp(inv(v.toFixed(3)), 'out');
+    const b = ngOp(inv(v.toFixed(3)), 'v(out)');
+    const e = Math.abs(a - b);
+    if (e > worst) { worst = e; worstAt = v; }
+  }
+  check('CMOS inverter transfer curve matches ngspice', worst < 5e-3,
+        `worst ${worst.toExponential(2)} V at Vin=${worstAt.toFixed(2)}`);
+  close('inverter output rails high', ourOp(inv('0'), 'out'), 3.3, 1e-6);
+  // Not exactly zero: the off PMOS still passes the gmin leak, so `out` sits a
+  // few nanovolts up. That is the correct answer, and a tolerance tighter than
+  // the physics would be testing the leak rather than the rail.
+  close('inverter output rails low', ourOp(inv('3.3'), 'out'), 0, 1e-6, 1e-6);
+
+  // A ring oscillator has no input: it starts from an initial condition and
+  // sustains itself. That makes it sensitive in a way an RC step is not —
+  // artificial damping in the integrator kills the oscillation, artificial gain
+  // grows it without bound, and NEITHER shows up in a settling test. The
+  // frequency is set by the stage delay, so it also checks the charge paths.
+  const ring = `ring oscillator
+VDD vdd 0 DC 3.3
+MN1 n2 n1 0 0 NM w=2u l=0.5u
+MP1 n2 n1 vdd vdd PM w=6u l=0.5u
+MN2 n3 n2 0 0 NM w=2u l=0.5u
+MP2 n3 n2 vdd vdd PM w=6u l=0.5u
+MN3 n1 n3 0 0 NM w=2u l=0.5u
+MP3 n1 n3 vdd vdd PM w=6u l=0.5u
+C1 n1 0 50f
+C2 n2 0 50f
+C3 n3 0 50f
+.ic v(n1)=0 v(n2)=3.3 v(n3)=0
+${MODELS}`;
+  const period = (series) => {
+    // Rising crossings of VDD/2, measured after the start-up transient.
+    const settled = series.filter((r) => r[0] > 8e-9);
+    const t = [];
+    for (let i = 1; i < settled.length; i++) {
+      if (settled[i - 1][1] < 1.65 && settled[i][1] >= 1.65) t.push(settled[i][0]);
+    }
+    if (t.length < 3) return NaN;
+    return (t[t.length - 1] - t[0]) / (t.length - 1);
+  };
+  const ours = ourTran(ring, 20e-9, 5e-12, 1e-11, 'n1');
+  const ref = ngTran(ring, '5p', '20n', 'v(n1)');
+  const Tours = period(ours), Tref = period(ref);
+  check('the ring oscillator actually oscillates',
+        Number.isFinite(Tours) && Tours > 0, `period ${Tours}`);
+  // 5%: the two solvers pick their own timesteps and the crossing estimate is
+  // sampled, so the frequency agrees to about that and no better.
+  close('ring oscillator period matches ngspice', Tours, Tref, 5e-2);
+  const amp = Math.max(...ours.map((r) => r[1])) - Math.min(...ours.map((r) => r[1]));
+  check('and swings rail to rail rather than decaying', amp > 3.0, `swing ${amp.toFixed(3)} V`);
+}
+
 rmSync(dir, { recursive: true, force: true });
 
 console.log(`\n${'-'.repeat(72)}`);
+
 console.log(`${pass} passed, ${fail} failed`);
 if (failures.length) {
   console.log('\nFailures:');

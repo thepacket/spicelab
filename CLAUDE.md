@@ -905,6 +905,34 @@ noise. What that table used to list — the bulk junction capacitance
 diffusion resistance (`nrd nrs`, which also needed `rsh` added to the model) —
 is implemented and diffed against ngspice.
 
+## Digital circuits
+
+**Transistor-level digital is ordinary analog SPICE and already works.** A CMOS
+inverter and a three-stage ring oscillator are in the ngspice differential
+suite; the inverter tracks ngspice to 1.4 mV across the whole transfer curve and
+the ring runs at 1.67 GHz, 99.7 ps a stage.
+
+Both were added because they are unusually SENSITIVE, not to claim a feature:
+
+- The **inverter** exercises both polarities at once, from cutoff through
+  saturation to linear. Every PMOS bug this project has had would show here as a
+  shifted switching threshold.
+- The **ring oscillator** has no input. It starts from an initial condition and
+  sustains itself, so artificial damping in the integrator kills it and
+  artificial gain grows it without bound — and NEITHER shows up in a settling
+  test like an RC step. Its frequency is set by the stage delay, so it also
+  checks the charge paths.
+
+**Event-driven logic simulation is deliberately absent, and should stay that
+way.** Logic-level digital is not MNA — it is event scheduling over discrete
+states, i.e. a second simulation kernel with its own queue, its own convergence
+story and its own timing model. ngspice reaches it through XSPICE, which this
+build excludes for a technical reason (code models are `dlopen`ed, see
+`docs/ngspice-wasm-build.md`), and writing our own would be a much larger
+project than the analog core. Behavioural digital that DOES fit — comparators,
+Schmitt triggers, simple gates — is already reachable with the controlled
+sources and the voltage-controlled switch.
+
 ## Validation discipline
 
 Keep both suites green at every commit. Add a case for every new device with a
