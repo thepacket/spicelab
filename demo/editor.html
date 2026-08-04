@@ -113,6 +113,24 @@
   /* Downloaded-library panel. Theme-aware via the same custom properties as
      everything else — a hard-coded colour here would survive the theme toggle
      and leave a light strip on the dark page. */
+  /* Collapsible sections. The right panel had grown to 1,850px of content in a
+     900px column — every feature added a section, and the ones added last
+     (Model libraries, .step) ended up furthest below the fold, behind the
+     instruments. With macOS overlay scrollbars there is nothing on screen to
+     say it scrolls at all, so it reads as truncated. */
+  #right details.sec { border-bottom: 1px solid var(--line); }
+  #right details.sec > summary {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); font-weight: 600; cursor: pointer;
+    padding: .45rem 0 .35rem; list-style: none; user-select: none;
+  }
+  #right details.sec > summary::-webkit-details-marker { display: none; }
+  #right details.sec > summary::before {
+    content: '▸'; display: inline-block; width: 1em; color: var(--muted);
+  }
+  #right details.sec[open] > summary::before { content: '▾'; }
+  #right details.sec > summary:hover { color: var(--fg); }
+  #right details.sec > .body { padding-bottom: .5rem; }
   #lib-dl, #sym-dl { margin-top: .4rem; }
   #sym-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   #sym-dl .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
@@ -671,6 +689,16 @@ function refresh() {
                 `Clear this to go back to the part above.</div>`;
       }
 
+      // The way IN to the vendor library, put where the user already is.
+      //
+      // Choosing a specific part was select-then-scroll-to-Model-libraries-
+      // then-search-then-Use-for-selected, and the Model libraries section sat
+      // ~420px below the fold behind five instruments. The capability existed
+      // and was, in practice, undiscoverable. The dropdown above deliberately
+      // does not list downloaded parts (one kind can have 51,000), so this
+      // button is the only signpost pointing at the path that does work.
+      html += `<div class="row"><button id="p-browse">Choose from library…</button></div>`;
+
       html += `<label>Instance parameters</label>` +
               `<input id="p-inst" value="${esc(c.props.params ?? '')}" ` +
               `placeholder="${esc(INSTANCE_HINT[c.type] ?? 'area=1')}">`;
@@ -697,6 +725,21 @@ function refresh() {
       editor.commit();
       c.props = { ...c.props, params: e.target.value.trim() };
       editor._changed();
+    });
+    document.getElementById('p-browse')?.addEventListener('click', () => {
+      const sec = revealSection('model libraries');
+      if (!sec) return;
+      const q = document.getElementById('lib-q');
+      // If nothing is installed yet, the search box is hidden and the download
+      // button is what the user needs to see — say so rather than focusing a
+      // field that is not there.
+      if (!q || q.offsetParent === null) {
+        status('download the model library first — the button is in Model libraries');
+        return;
+      }
+      q.focus();
+      status(`searching the library for a ${c.type} — pick one and press ` +
+             `"Use for selected"`);
     });
     document.getElementById('p-model')?.addEventListener('change', (e) => {
       editor.commit();
@@ -778,6 +821,94 @@ document.getElementById('open').onclick = () => {
   };
   inp.click();
 };
+
+/**
+ * Fold the right panel into collapsible sections.
+ *
+ * Done in JS over the existing markup rather than by restructuring it: the
+ * grouping is "an <h2> plus everything up to the next <h2>", which is already
+ * what the markup means, so deriving it cannot drift from the markup the way a
+ * hand-maintained second copy would.
+ *
+ * WHY: the panel had reached 1,850px of content in a 900px column. Every
+ * feature added a section, and the most recent ones — Model libraries, .step —
+ * sat furthest down, behind five instruments. Under macOS overlay scrollbars
+ * there is nothing on screen indicating it scrolls, so the panel reads as
+ * truncated and everything below the fold may as well not exist. That is not a
+ * cosmetic complaint: a feature nobody can reach is not shipped.
+ *
+ * Open/closed is remembered, because which sections matter is per-user and per
+ * task, and re-collapsing them on every reload would be its own annoyance.
+ */
+function foldRightPanel() {
+  const right = document.getElementById('right');
+  // Always open: you are looking at these to work at all.
+  const OPEN_BY_DEFAULT = new Set(['selection', 'design rules', 'simulate']);
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('spicelab.sections') || '{}'); }
+  catch { /* private mode */ }
+
+  const kids = [...right.children];
+  let i = 0;
+  while (i < kids.length) {
+    if (kids[i].tagName !== 'H2') { i++; continue; }
+    const h2 = kids[i];
+    const body = [];
+    let j = i + 1;
+    while (j < kids.length && kids[j].tagName !== 'H2') body.push(kids[j++]);
+
+    const key = h2.textContent.trim().toLowerCase().split(/\s+/).slice(0, 2).join(' ');
+    const det = document.createElement('details');
+    det.className = 'sec';
+    det.open = saved[key] ?? OPEN_BY_DEFAULT.has(key);
+    const sum = document.createElement('summary');
+    // Move the heading's own nodes across, so badges like the engine name and
+    // the .step progress counter keep working — they are updated by id.
+    while (h2.firstChild) sum.appendChild(h2.firstChild);
+    det.appendChild(sum);
+    const wrap = document.createElement('div');
+    wrap.className = 'body';
+    for (const el of body) wrap.appendChild(el);
+    det.appendChild(wrap);
+
+    right.replaceChild(det, h2);
+    det.addEventListener('toggle', () => {
+      saved[key] = det.open;
+      try { localStorage.setItem('spicelab.sections', JSON.stringify(saved)); }
+      catch { /* ignore */ }
+      // A canvas inside a closed <details> has ZERO size, and every instrument
+      // here sizes itself from getBoundingClientRect at draw time. Without a
+      // redraw on open, a run made while a section was collapsed comes back to
+      // a blank or wrongly-scaled plot — data present, picture missing, which
+      // is the failure this project treats as worse than an error.
+      if (det.open) requestAnimationFrame(() => { try { redrawInstruments(); } catch {} });
+    });
+    kids.splice(i, 1 + body.length, det);
+    i++;
+  }
+}
+
+/** Redraw every instrument that sizes itself from the DOM. */
+function redrawInstruments() {
+  drawScope();
+  bode.draw(bodeView);
+  if (lastSweep) drawSweep(...lastSweep);
+}
+
+/** Open a section by its heading text and bring it into view. */
+function revealSection(name) {
+  for (const d of document.querySelectorAll('#right details.sec')) {
+    if (d.querySelector('summary')?.textContent.trim().toLowerCase()
+          .startsWith(name.toLowerCase())) {
+      d.open = true;
+      d.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return d;
+    }
+  }
+  return null;
+}
+
+foldRightPanel();
 
 // ---------------------------------------------------------------- simulate
 let client = null;
