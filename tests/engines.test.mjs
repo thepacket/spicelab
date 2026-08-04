@@ -127,6 +127,48 @@ console.log('\nThe Rust core satisfies the contract');
   for (const m of ['canRun', 'load', 'attachRing', 'op', 'tran', 'ac', 'resume', 'pause', 'cancel']) {
     check(`implements ${m}()`, typeof e[m] === 'function');
   }
+  // Optional in the contract, so an engine that cannot sweep is reported by
+  // name rather than throwing "undefined is not a function" at the user.
+  check('implements the optional dc()', typeof e.dc === 'function');
+
+  // The sweep must be RIGHT, not merely present. A 1k/1k divider is exactly
+  // half the source at every point, so both the slope and the endpoints are
+  // known in closed form. `dc_sweep` has been fixture-verified since the first
+  // port; what was never checked is this path — the wasm wrapper, the staging
+  // buffer and the row shape — because none of it existed.
+  {
+    e.load('divider\nV1 in 0 DC 0\nR1 in mid 1k\nR2 mid 0 1k\n.op\n.end');
+    const res = e.dc({ source: 'V1', start: 0, stop: 10, step: 1 });
+    eq('a sweep produces one row per step', res.points, 11);
+    // The transient row shape, NOT AC's interleaved re/im. This is what lets
+    // the probe system and the renderer stay ignorant of which analysis ran.
+    eq('rows are [x, v0, v1, ...]', res.stride, 1 + e.session.numUnknowns);
+
+    const labels = e.load('divider\nV1 in 0 DC 0\nR1 in mid 1k\nR2 mid 0 1k\n.op\n.end').labels;
+    // Labels are bare net names — `mid`, not `V(mid)`. `Probe.resolve` is what
+    // knows about the `V(...)` spelling, at the engine boundary.
+    const mid = labels.indexOf('mid');
+    check('the swept node is in the labels', mid >= 0, JSON.stringify(labels));
+    const r2 = e.dc({ source: 'V1', start: 0, stop: 10, step: 1 });
+    const at = (k) => r2.data[k * r2.stride + 1 + mid];
+    const x = (k) => r2.data[k * r2.stride];
+    check('x carries the swept value, not the row index',
+          Math.abs(x(0) - 0) < 1e-12 && Math.abs(x(10) - 10) < 1e-12,
+          `${x(0)} .. ${x(10)}`);
+    check('the divider is exactly half at every point',
+          r2.data.length > 0 &&
+          [0, 3, 7, 10].every((k) => Math.abs(at(k) - x(k) / 2) < 1e-9),
+          [0, 3, 7, 10].map((k) => `${x(k)}->${at(k)}`).join(' '));
+  }
+
+  // A sweep of a source that is not there must say so, not sweep nothing.
+  {
+    e.load('divider\nV1 in 0 DC 0\nR1 in 0 1k\n.op\n.end');
+    let msg = '';
+    try { e.dc({ source: 'V9', start: 0, stop: 1, step: 0.5 }); }
+    catch (err) { msg = err.message; }
+    check('an unknown sweep source is reported', /V9|not found/i.test(msg), msg);
+  }
   eq('declares an id', e.id, 'rust');
   check('declares a label', typeof e.label === 'string' && e.label.length > 0);
   eq('claims to be interactive', e.interactive, true);

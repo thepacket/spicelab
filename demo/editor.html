@@ -198,6 +198,7 @@
   <h2>Analyses</h2>
   <button data-place="tran">.tran</button>
   <button data-place="ac">.ac</button>
+  <button data-place="dc">.dc</button>
   <button data-place="op">.op</button>
 
   <h2>Edit</h2>
@@ -233,6 +234,7 @@
     <button id="run-op">.op</button>
     <button id="run-tran">.tran</button>
     <button id="run-ac">.ac</button>
+    <button id="run-dc">.dc</button>
   </div>
   <div class="row">
     <input id="tstop" value="5m" title="tstop"><input id="tstep" value="10u" title="tstep">
@@ -364,7 +366,8 @@ function drawScope() {
   scope.draw();
   if (gpu) {
     axes.draw(gpu.pad, gpu.window(), gpu.unit, eng,
-              gpu.count < 2 ? 'route a probe and run a transient' : null);
+              gpu.count < 2 ? 'route a probe and run a transient' : null,
+              gpu.xUnit);
   }
 }
 const bode = new BodePlotter(document.getElementById('bode'), 'bode');
@@ -1190,6 +1193,50 @@ document.getElementById('run-ac').onclick = async () => {
     bode.draw(bodeView);
     status(`AC sweep (${block ? block.ref + ' on the canvas' : 'the panel'}): ` +
            `${res.points} points, ${spec.start} Hz to ${spec.stop} Hz`);
+  } catch (e) { status('error: ' + e.message); }
+};
+
+/**
+ * DC sweep.
+ *
+ * Reuses the scope with no changes at all, which is the payoff for making the
+ * row shape `[x, v0, v1, ...]` in the wasm wrapper rather than inventing a
+ * third format: a sweep is a real analysis like a transient, so the probe
+ * system and the renderer never learn which one produced the rows. The x axis
+ * is the swept source's value instead of time.
+ *
+ * Unlike `.tran` and `.ac` there is no panel fallback, because a sweep needs
+ * the NAME of a source and there is no sensible default for that — guessing
+ * `V1` would silently sweep the wrong thing on a schematic that has a V2.
+ */
+document.getElementById('run-dc').onclick = async () => {
+  if (!guard()) return;
+  try {
+    const block = placedAnalysis('dc');
+    if (!block) {
+      status('place a .dc block and name the source to sweep');
+      return;
+    }
+    const spec = {
+      source: String(block.props.source ?? '').trim(),
+      start: suffix(block.props.start),
+      stop: suffix(block.props.stop),
+      step: suffix(block.props.step),
+    };
+    if (!spec.source) { status(`${block.ref} does not name a source to sweep`); return; }
+    const c = await sim();
+    const info = await c.load(current.netlist);
+    showEngine(c);
+    // The x axis is the SWEPT SOURCE's value, so its unit follows the source's
+    // card letter — amps for a current source. Defaulting to volts would be
+    // right most of the time and silently wrong for an I sweep.
+    const xUnit = /^i/i.test(spec.source) ? 'A' : 'V';
+    warnUnresolved(scope.begin(probes, info.labels, xUnit));
+    const res = await c.dc(spec);
+    scope.push(res.data, res.points, res.stride);
+    drawScope();
+    status(`DC sweep (${block.ref} on the canvas): ${spec.source} from ` +
+           `${spec.start} to ${spec.stop}, ${res.points} points`);
   } catch (e) { status('error: ' + e.message); }
 };
 

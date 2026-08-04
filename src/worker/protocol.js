@@ -21,6 +21,8 @@ export const Cmd = Object.freeze({
   TRAN: 'tran',
   /** Run an AC sweep to completion. */
   AC: 'ac',
+  /** Run a DC sweep to completion. */
+  DC: 'dc',
   /** Stop producing but keep the session. */
   PAUSE: 'pause',
   /** Resume a paused transient. */
@@ -43,6 +45,8 @@ export const Evt = Object.freeze({
   TRAN_DONE: 'tran-done',
   /** AC sweep finished; carries the frequency-domain rows. */
   AC_DONE: 'ac-done',
+  /** DC sweep finished; carries rows in the transient shape. */
+  DC_DONE: 'dc-done',
   /** Any failure, with a human-readable message. */
   ERROR: 'error',
 });

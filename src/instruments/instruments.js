@@ -96,11 +96,21 @@ export class Oscilloscope extends BaseInstrument {
     this.lo = Infinity;
     this.hi = -Infinity;
     this.unit = 'V';
+    this.xUnit ??= 's';
   }
 
-  /** Bind probes to a run's column layout. Call once per run. */
-  begin(probeSet, labels) {
+  /**
+   * Bind probes to a run's column layout. Call once per run.
+   *
+   * `xUnit` names the independent variable's unit. It must stay in step with
+   * `GpuScope.begin` — these two are the same instrument with two backends,
+   * and the fallback quietly labelling a DC sweep in seconds while the GPU
+   * path labels it in volts is exactly the kind of divergence that makes a
+   * fallback untrustworthy.
+   */
+  begin(probeSet, labels, xUnit = 's') {
     this.reset();
+    this.xUnit = xUnit;
     this.bound = probeSet.routedTo(this.id).map((p, i) => {
       const r = p.resolve(labels);
       return {
@@ -180,9 +190,9 @@ export class Oscilloscope extends BaseInstrument {
       g.fillText(eng(v, this.unit, 3), padL - 5 * d, y + 3.5 * d);
     }
     g.textAlign = 'left';
-    g.fillText(eng(t0, 's', 3), padL, h - 6 * d);
+    g.fillText(eng(t0, this.xUnit, 3), padL, h - 6 * d);
     g.textAlign = 'right';
-    g.fillText(eng(t1, 's', 3), w - padR, h - 6 * d);
+    g.fillText(eng(t1, this.xUnit, 3), w - padR, h - 6 * d);
     g.textAlign = 'left';
 
     for (let k = 0; k < this.bound.length; k++) {

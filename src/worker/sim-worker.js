@@ -107,6 +107,15 @@ self.onmessage = async (e) => {
         );
         break;
       }
+      case Cmd.DC: {
+        if (!engine.dc) throw new Error(`${engine.label} cannot run a DC sweep`);
+        const res = engine.dc(args);
+        self.postMessage(
+          { id, evt: Evt.DC_DONE, payload: res },
+          [res.data.buffer],
+        );
+        break;
+      }
       case Cmd.PAUSE:
         engine.pause();
         reply(id, 'paused', {});

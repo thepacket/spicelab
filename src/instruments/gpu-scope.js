@@ -167,14 +167,25 @@ export class GpuScope {
     this.lo = Infinity;
     this.hi = -Infinity;
     this.unit = 'V';
+    this.xUnit ??= 's';
     this.capacity = 0;
     this.xbuf?.destroy();
     this.xbuf = null;
   }
 
-  /** Bind probes to a run. Returns any that failed to resolve. */
-  begin(probeSet, labels) {
+  /**
+   * Bind probes to a run. Returns any that failed to resolve.
+   *
+   * `xUnit` is the unit of the independent variable, and it is a PARAMETER
+   * because this scope now serves two analyses. A transient's x is seconds; a
+   * DC sweep's x is the swept source's value, in volts or amps. The axis was
+   * hardcoded to seconds, so a sweep from 0 to 5 V was labelled "0 s .. 5 s" —
+   * a correct curve under a wrong axis, which is this project's characteristic
+   * failure and is worse than no axis at all.
+   */
+  begin(probeSet, labels, xUnit = 's') {
     this.reset();
+    this.xUnit = xUnit;
     const routed = probeSet.routedTo(this.id);
     this.traces = routed.map((p, i) => {
       const r = p.resolve(labels);
@@ -396,8 +407,12 @@ export class ScopeAxes {
    * @param {{l:number,r:number,t:number,b:number}} pad matching the GPU scope
    * @param {{t0:number,t1:number,lo:number,hi:number}} win
    * @param {(v:number,unit:string,digits?:number)=>string} fmt
+   * @param {?string} empty
+   * @param {string} xUnit unit of the independent variable — 's' for a
+   *   transient, but a DC sweep's x is the swept source's value. Hardcoding
+   *   seconds put a volts axis under a seconds label.
    */
-  draw(pad, win, unit, fmt, empty = null) {
+  draw(pad, win, unit, fmt, empty = null, xUnit = 's') {
     const r = this.canvas.getBoundingClientRect();
     const dpr = devicePixelRatio || 1;
     const w = Math.max(1, Math.round(r.width * dpr));
@@ -445,9 +460,9 @@ export class ScopeAxes {
       g.fillText(fmt(v, unit, 3), L - 5 * dpr, y + 3.5 * dpr);
     }
     g.textAlign = 'left';
-    g.fillText(fmt(win.t0, 's', 3), L, h - 6 * dpr);
+    g.fillText(fmt(win.t0, xUnit, 3), L, h - 6 * dpr);
     g.textAlign = 'right';
-    g.fillText(fmt(win.t1, 's', 3), w - R, h - 6 * dpr);
+    g.fillText(fmt(win.t1, xUnit, 3), w - R, h - 6 * dpr);
     g.textAlign = 'left';
   }
 }

@@ -19,7 +19,9 @@
 //! Row layout is `[t, x0, x1, ... x(n-1)]`, so `stride == num_unknowns + 1`.
 //! The JS side reads `stride` from the ring header, never hardcodes it.
 
-use spicelab_core::analyses::dc::{ac_sweep, op, AcScale, AcSpec};
+use spicelab_core::analyses::dc::{
+    ac_sweep, dc_sweep, op, AcScale, AcSpec, SweepProperty, SweepSpec,
+};
 use spicelab_core::analyses::tran::{TranOptions, TransientRun};
 use spicelab_core::circuit::Circuit;
 use spicelab_core::context::Method;
@@ -297,6 +299,54 @@ impl Session {
             }
         }
         Ok(res.freq.len())
+    }
+
+    /// Run a DC sweep to completion and stage it as rows of
+    /// `[x, v0, v1, ...]` — the SAME shape a transient produces.
+    ///
+    /// `dc_sweep` has been implemented and fixture-verified since the first
+    /// port, but nothing could reach it: this boundary exposed only op, tran
+    /// and AC, so the analysis the parser had accepted all along could not be
+    /// run. That is why this is a thin wrapper and not new numerics.
+    ///
+    /// Staged rather than streamed, like AC and for the same reason: a sweep
+    /// is a fixed, usually small point count, so it does not need the ring's
+    /// back-pressure. It shares the transient row shape rather than AC's
+    /// interleaved re/im, because a sweep is a real analysis — which means the
+    /// probe system and the renderer need no idea which of the two ran.
+    ///
+    /// A nested second sweep is deliberately NOT exposed yet. `dc_sweep`
+    /// supports one, but it yields a FAMILY of traces, and every consumer
+    /// above here — the ring, `Probe.resolve`, the scope — assumes one trace
+    /// per unknown. Flattening a family into that shape would silently plot
+    /// the last curve and drop the rest.
+    #[wasm_bindgen(js_name = runDc)]
+    pub fn run_dc(
+        &mut self,
+        source: &str,
+        start: f64,
+        stop: f64,
+        step: f64,
+    ) -> Result<usize, JsError> {
+        let spec = SweepSpec {
+            device: source.to_string(),
+            property: SweepProperty::Dc,
+            start,
+            stop,
+            step,
+        };
+        let res =
+            dc_sweep(&mut self.circuit, &spec, None).map_err(|e| JsError::new(&e.to_string()))?;
+        let trace = res
+            .sweeps
+            .first()
+            .ok_or_else(|| JsError::new("dc sweep produced no points"))?;
+        self.staging.clear();
+        for (k, x) in trace.x.iter().enumerate() {
+            self.staging.push(*x);
+            self.staging.extend_from_slice(&trace.solutions[k]);
+        }
+        Ok(trace.x.len())
     }
 }
 

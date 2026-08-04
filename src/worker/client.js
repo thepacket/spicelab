@@ -224,6 +224,17 @@ export class SimClient {
     return this._send(Cmd.AC, opts);
   }
 
+  /**
+   * Run a DC sweep. Resolves with `{points, stride, data}` where each row is
+   * `[x, v0, v1, ...]` — the same shape a transient produces, so a probe
+   * resolved against a sweep needs no special case.
+   *
+   * `opts.source` names the independent source to sweep, and is required.
+   */
+  dc(opts) {
+    return this._send(Cmd.DC, opts);
+  }
+
   pause() {
     return this._send(Cmd.PAUSE);
   }

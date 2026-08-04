@@ -1,10 +1,18 @@
 /**
  * The simulation-engine contract, and the rule for choosing between engines.
  *
- * SpiceLab has one engine today — the Rust core — and is gaining a second,
- * ngspice compiled to wasm, which covers the devices and analyses the Rust core
- * does not implement (BSIM, JFET, VDMOS, transmission lines, `.noise`, `.tf`,
- * `.sens`). The two are not interchangeable and are not meant to be:
+ * SpiceLab has two engines: the Rust core, and ngspice compiled to wasm, which
+ * covers the DEVICES the Rust core does not implement — BSIM, JFET, VDMOS,
+ * transmission lines.
+ *
+ * Devices, not analyses. `NgspiceEngine` drives ngspice with explicit nutmeg
+ * commands rather than executing the netlist's own analysis cards, so a
+ * netlist carrying `.noise` routes there correctly and is then asked to run a
+ * transient — the card is never executed. Both engines offer exactly the
+ * analyses `EngineContract` below declares. (This comment used to claim the
+ * coverage engine added `.noise`, `.tf` and `.sens`. It does not.)
+ *
+ * The two are not interchangeable and are not meant to be:
  *
  *   - The Rust core is the INTERACTIVE engine. Its symbolic/numeric split means
  *     a value change re-stamps an already-analysed matrix, and it streams rows
@@ -37,6 +45,12 @@
  * @property {(opts: object) => Promise<void>} tran
  * @property {(opts: object) => {points: number, stride: number,
  *   data: Float64Array}} ac
+ * @property {(opts: object) => {points: number, stride: number,
+ *   data: Float64Array}} [dc] OPTIONAL. An engine that cannot sweep says so by
+ *   not having it, and `sim-worker` reports that by name rather than throwing
+ *   an undefined-is-not-a-function at the user. ngspice could implement this,
+ *   but does not yet — it is driven by nutmeg commands, so it would need a
+ *   `dc` command and the scale-vector handling that goes with it.
  * @property {() => Promise<void>} resume
  * @property {() => void} pause
  * @property {() => void} cancel

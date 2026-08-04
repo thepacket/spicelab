@@ -940,9 +940,17 @@ SPICE text block.
 ## Two engines
 
 The Rust core is not the only planned engine. ngspice 46 compiles to wasm (see
-`docs/ngspice-wasm-build.md`, verified working) and will run beside it, covering
-the devices and analyses the Rust core does not implement — BSIM3/4, VDMOS,
-JFET, transmission lines, `.noise`, `.tf`, `.sens`.
+`docs/ngspice-wasm-build.md`, verified working) and runs beside it, covering the
+DEVICES the Rust core does not implement — BSIM3/4, VDMOS, JFET, transmission
+lines.
+
+**The coverage engine buys devices, not analyses, and this file used to claim
+otherwise** (it listed `.noise`, `.tf` and `.sens`). `NgspiceEngine` drives
+ngspice with explicit nutmeg commands — `op`, `tran <step> <stop>`, `ac …` —
+rather than executing the netlist's own analysis cards. So a netlist carrying
+`.noise` routes to ngspice correctly, and ngspice is then asked to run a
+transient; the `.noise` card is never executed. The analysis set is the same on
+both engines, and it is whatever `EngineContract` exposes.
 
 They are **not interchangeable, and that is the design**:
 

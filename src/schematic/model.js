@@ -185,6 +185,26 @@ export const SYMBOLS = {
     params: [],
     card: () => '.op',
   },
+  /**
+   * DC sweep. `source` names an independent source by its REFERENCE — `V1`,
+   * not a net — because that is what the `.dc` card takes and what
+   * `dc_sweep` looks up.
+   *
+   * The solver has had this analysis since the first port and the parser has
+   * always accepted the card; it simply was not exposed across the wasm
+   * boundary, was not in the engine contract, and had no block here, so
+   * nothing in the application could run it.
+   */
+  dc: {
+    prefix: 'DC', pins: [], directive: true, label: 'DC sweep',
+    params: [
+      { key: 'source', def: 'V1' },
+      { key: 'start', def: '0' },
+      { key: 'stop', def: '5' },
+      { key: 'step', def: '0.05' },
+    ],
+    card: (p) => `.dc ${p.source} ${p.start} ${p.stop} ${p.step}`,
+  },
 
   /**
    * An instance of a `.subckt` macromodel.

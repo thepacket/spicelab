@@ -223,4 +223,24 @@ export class SimEngine {
     // Copied out of wasm memory: the caller keeps this past the next wasm call.
     return { points: n, stride, data: view.slice() };
   }
+
+  /**
+   * DC sweep. Rows are `[x, v0, v1, ...]` — the transient shape, not AC's
+   * interleaved re/im, because a sweep is a real analysis.
+   *
+   * That is the whole reason this needs no work in the probe system or the
+   * renderer: `Probe.resolve` returns a reader parameterised by stride and
+   * offset precisely so one resolution path serves every analysis.
+   */
+  dc({ source, start = 0, stop = 5, step = 0.1 }) {
+    if (!source) throw new Error('a DC sweep needs a source to sweep');
+    const n = this.session.runDc(source, start, stop, step);
+    const stride = 1 + this.session.numUnknowns;
+    const view = new Float64Array(
+      this.getMemory().buffer,
+      this.session.stagingPtr,
+      n * stride,
+    );
+    return { points: n, stride, data: view.slice() };
+  }
 }
