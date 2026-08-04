@@ -27,6 +27,7 @@ npm run test:engines              # engine contract + which engine runs a design
 npm run test:ngspice-engine       # ngspice-in-wasm streaming through the ring
 npm run build:ngspice             # build ngspice 46 -> src/ngspice/ (~5 min)
 npm run test:schematic            # net extraction, ERC, emit, solver round trip
+npm run test:models               # library download, parse, store, part registration
 npm run test:probes               # probe resolution, routing, persistence
 npm run test:batch                # sweeps, Monte Carlo, measurement reduction
 npm run test:ngspice              # differential vs real ngspice (skips if absent)
@@ -261,6 +262,56 @@ leading `.`, which no prose can be mistaken for. When a heuristic disambiguates
 data from metadata, prefer the boring positional rule; the clever one fails
 quietly on real input.
 
+**A `.model` card's TYPE was never checked, so the wrong device was built.**
+Every model reader in `build.rs` selected behaviour with a match ending in `_`,
+so an unrecognised type silently became the default. `M1 d g s b <a VDMOS card>`
+was built as a **LEVEL 1 Shichman-Hodges MOSFET**; `LPNP`, which vendor op-amp
+macromodels use for the lateral PNP, was built as an NPN; `diode_model` did not
+look at the type at all. The card's own parameters cannot save you, because
+unknown model parameters are deliberately IGNORED as metadata — the rule two
+sections up that makes vendor cards loadable — so a VDMOS's `rg` and `mtriode`
+vanished and its `vto`/`kp` were fed to equations they do not belong to.
+
+This is the hazard `mos_model` already refused loudly for `LEVEL`, three lines
+below where the check was missing. It matters at scale: the KiCad Spice Library
+carries 4,372 VDMOS cards, which are the power FETs a user actually reaches for.
+`check_model_kind` now refuses them as **`Unsupported`, not `Invalid`**, so they
+still route to ngspice, which implements them.
+
+It also deleted 41 false positives from the ngspice corpus — CIDER's `NBJT`,
+`NUMOS` and `NUMD` are NUMERICAL device models, a mesh-based physical
+simulation with nothing in common with Gummel-Poon, and this core was reading
+them as ordinary transistors and reporting that they parsed cleanly. The corpus
+gained a `minOk` floor to catch the opposite error, and lowering it 61 -> 20
+required writing that reason down.
+
+**The same shape turned up three more times in one session, in three different
+languages of the codebase**, which is why it is worth naming as a class rather
+than a bug:
+
+- `drawComponent` fell back to `ART.resistor` for a symbol type with no art, so
+  adding a device and forgetting its drawing showed a RESISTOR where a
+  transistor is — the picture disagreeing with the netlist, which is the exact
+  thing drawing through `pinPositions`'s transform exists to prevent. The
+  fallback is now a crossed box, and a test asserts it is unreachable.
+- The part-validation loop in `schematic.test.mjs` ended in a bare `else` that
+  ran the BJT bias rig, so a part of any newly added kind would have been biased
+  as a transistor and, if it happened to pass, reported as validated.
+- `addFromLibrary` asked the user to retype a `.subckt`'s pin list "in
+  declaration order" — data we had already parsed. Pin order is the netlist
+  contract; asking a human to re-key it is manufacturing the error.
+
+**Audit for defaults that swallow the unknown**: a `_` arm, a `??` fallback, a
+trailing `else`. Each one converts "I do not recognise this" into "I will treat
+it as the common case", and every instance above produced a believable wrong
+answer rather than an error.
+
+**A literal NUL byte sat in `erc.js`.** `[a, b].sort().join('\x00')` was written
+with an actual 0x00 in the source rather than the escape. Valid JavaScript and
+behaviourally identical — but it made the file BINARY to `grep`, `git diff` and
+most editors, and if any tool ever strips the byte the key silently degrades to
+`join('')`, where `["a","bc"]` and `["ab","c"]` collide. Write the escape.
+
 ---
 
 ## Architecture decisions — settled, with reasons
@@ -491,6 +542,14 @@ Each item constrains the next; deviating tends to cause rework.
    Pages, CloudFront response-headers policy, nginx). Raw GitHub Pages cannot.
    The standing cost is that every cross-origin subresource must opt in via
    CORP/CORS — keep fonts, images and third-party scripts same-origin.
+
+   **A working deployment is checked in:** `Dockerfile`, `Caddyfile`,
+   `fly.toml`, with the reasoning in `docs/deploy-fly.md`. It exists because
+   `src/wasm/`, `src/wasm-node/` and `src/ngspice/` are gitignored build
+   artifacts, so a deploy must BUILD them — and because the wasm-bindgen CLI
+   version has to match the crate version in `Cargo.lock`, which the image
+   reads out of the lockfile rather than pinning by hand. `--build-arg
+   NGSPICE=ngspice-skip` drops the coverage engine for a fast build.
 5. **Schematic editor.** Net extraction, ERC and netlist emission are **done**
    and headless, in `src/schematic/` with `tests/schematic.test.mjs` (40
    checks). The interactive canvas is **not started** — see below.
@@ -723,6 +782,87 @@ upgrade `verified` without reading an actual LICENSE file.
 it on the canvas as a SPICE text block — never uploaded, so the vendor's file
 stays the user's copy. It reports which `.subckt` names the file defines,
 because that is what you must type into a `subckt` block next.
+
+## Downloading a whole library, into the browser
+
+**Download KiCad Spice Library…** fetches that entire collection on one
+explicit user action, parses it in the browser, and keeps it in IndexedDB so it
+happens once. `src/schematic/model-library.js` (fetch + parse),
+`model-store.js` (persistence), `model-index.js` (their `Supported.pickle`
+name→file index), `tests/model-library.test.mjs` (124 checks).
+
+**This is the links-not-a-bundle rule applied, not weakened.** The user's
+browser fetches from GitHub and stores on the user's machine; SpiceLab never
+holds, serves or redistributes a byte. No part of that library is vendored,
+committed, or in the test fixtures — the fixtures below are hand-written to
+reproduce its SHAPES.
+
+Facts that decided the design, all verified rather than assumed:
+
+- **It is 2,073 files / 66.2 MB, not one archive.** `codeload.github.com`
+  answers with `access-control-allow-origin: https://render.githubusercontent.com`
+  — not `*` — so a zipball fails the CORS check and its body cannot be read
+  from our origin. (`no-cors` is permitted by its CORP but yields an opaque,
+  unreadable body.) jsDelivr refuses the repo outright: "Package size exceeded
+  the configured limit of 50 MB". `raw.githubusercontent.com` sends both
+  `access-control-allow-origin: *` and `cross-origin-resource-policy:
+  cross-origin`, so it is the only path that is both readable and legal under
+  the COEP `require-corp` this app cannot drop. One request per file.
+- **Do NOT take the file list from their own index.** `Supported.pickle` maps
+  name→file and is right for LOOKUP, but references only 1,159 of the 2,073
+  files: their `generate_supported.py` scans a fixed set of extensions, so 914
+  files (17.6 MB, 700 of them `.spi`) carry real cards it never lists. The list
+  comes from the git tree and every file is parsed here. Our parse recovers
+  100% of the real definitions their index claims **plus 141 it misses**, and
+  found 3 phantom entries in it (`adg5115/ad` is attributed to a file that does
+  not contain the string).
+- **The index is a Python pickle, and the reader is not an unpickler.**
+  Unpickling is equivalent to executing: `STACK_GLOBAL`/`REDUCE` look up and
+  call arbitrary Python. `readPickleIndex` implements only the container and
+  string opcodes and throws on any other byte, so the dangerous ones are
+  *absent* rather than blocked. Asserted against real code-executing pickles.
+
+Four silent bugs this found, all of the project's usual shape:
+
+- **CRLF offset drift.** Line offsets were derived as `length + 1`, charging
+  one character for a two-character terminator. These files are overwhelmingly
+  CRLF, so the error compounds per line: by line ~2,800 a definition's slice
+  lands inside a DIFFERENT model card. Every stored definition in every CRLF
+  file would have been quietly wrong. Measure the terminator, never assume it.
+- **An unbalanced `.subckt` swallowed the rest of the file.**
+  `Ltc_Old_Big.lib` has 540 `.subckt` against 539 `.ends`. With a depth
+  COUNTER the depth never returns to zero, every later definition looks nested,
+  and 113 real macromodels (LT1673, LT1818, LTC2055…) vanish with no error. A
+  frame STACK pops each block on its own `.ends`, so one malformed block costs
+  only itself. Both of these are mutation-tested.
+- **The stored record dropped `params`.** `saveLibrary` enumerates its fields,
+  so a field added in `parseDefinitions` is silently lost — and a fully
+  downloaded library registered ZERO placeable parts: every card present, every
+  one stripped of its parameters. This is the `enabled`/`toJSON` trap in a new
+  place. **If you add a field in `parseDefinitions`, add it to the stored
+  record in the same edit.**
+- **The emitter used `part.id` as the SPICE model name.** Legal for a built-in
+  (`D_SIGNAL`), not for `lib:1n4148@Models/Diode/DIODE2.lib#99` — the netlist
+  came out as `.model lib:1n4148@Models/...#99 D (...)`. The id must stay the
+  provenance-bearing document key, so `modelName()` DERIVES a legal token from
+  it, with a hash suffix because this library defines `2n2222` in five files
+  with different parameters and two of them must not collapse onto one name.
+
+Two design points worth keeping:
+
+- **Downloaded parts live in `LIBRARY_PARTS`, never merged into `PARTS`.** The
+  built-ins are Modified BSD, individually validated against this solver, and
+  shipped here; downloaded ones are third-party, unvalidated, and not ours to
+  redistribute. Merging loses that distinction exactly when it matters. Their
+  ids are namespaced `lib:` so they cannot shadow a built-in, and their `note`
+  says plainly that nothing has been run against them.
+- **The property dropdown does not list them.** One kind can have tens of
+  thousands of downloaded parts, and building that many `<option>` nodes on
+  every selection change freezes the panel — and is unusable anyway. Built-ins
+  plus the current selection are listed, the count of the rest is reported, and
+  the library is reached by SEARCH, with "Use for selected" assigning one (it
+  refuses a kind mismatch, since a PNP card on an NPN symbol would simulate
+  happily and answer wrongly).
 
 ## Parser conformance: two third-party corpora
 

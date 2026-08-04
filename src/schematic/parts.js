@@ -185,25 +185,207 @@ export const PARTS = [
     source: 'ngspice examples/digital/compare/74HCng_short_2.lib .model MHCPEN',
     note: 'P-channel complement from the same 74HC-class process. Lower KP and a larger DELTA, as p-channel devices have.',
   },
+
+  // --- Devices the COVERAGE engine runs ------------------------------------
+  //
+  // The cards below are ngspice's own, on the same Modified BSD terms and with
+  // the same provenance recorded as everything above. What differs is how they
+  // were checked: the interactive core implements neither the JFET (element
+  // `J`) nor the VDMOS, so a design using one routes to ngspice, and the
+  // reference values in each `note` were read from ngspice rather than from
+  // this solver. That is stated per part rather than left to be inferred,
+  // because "validated" has meant something specific in this file until now.
+  //
+  // The switch is the exception: the interactive core has implemented it from
+  // the start and it simply had no symbol.
+  {
+    id: 'J_NJF_GENERAL',
+    label: 'N-channel JFET (general purpose)',
+    kind: 'njf',
+    model: 'NJF',
+    // Verbatim from tests/jfet/jfet_vds-vgs.cir
+    params: 'LEVEL=1 VTO=-3.5 BETA=4.1E-4 LAMBDA=0.002 RD=200',
+    source: 'ngspice tests/jfet/jfet_vds-vgs.cir .model MODJ',
+    note: 'Depletion-mode n-channel: it conducts at Vgs=0 and pinches off at -3.5 V, which is the opposite of a MOSFET and the usual surprise. Runs on the coverage engine.',
+  },
+  {
+    id: 'J_PJF_GENERAL',
+    label: 'P-channel JFET (small signal)',
+    kind: 'pjf',
+    model: 'PJF',
+    // Verbatim from examples/probe/TL072.301
+    params: 'IS=15.00E-12 BETA=270.1E-6 VTO=-1',
+    source: 'ngspice examples/probe/TL072.301 .model JX',
+    note: 'The input-stage JFET from a TL072 macromodel. Runs on the coverage engine.',
+  },
+  {
+    id: 'M_VDMOS_N_POWER',
+    label: 'N-channel power MOSFET (200 V)',
+    kind: 'nvdmos',
+    model: 'VDMOS',
+    // Verbatim from examples/vdmos/100W.sp
+    params: 'nchan Vto=4 Kp=5.9 Lambda=.001 Theta=0.015 ksubthres=.27 Rd=61m Rs=18m Rg=3 Rds=1e7 Cgdmax=2.45n Cgdmin=10p a=0.3 Cgs=1.2n Is=60p N=1.1 Rb=14m XTI=3 Cjo=1.5n Vj=0.8 m=0.5 tcvth=-0.0065 MU=-1.27 texp0=1.5 Rthjc=0.4 Cthj=5e-3',
+    source: 'ngspice examples/vdmos/100W.sp .model IRFP240',
+    note: 'A real power FET, with the intrinsic body diode (Is, Rb) and the nonlinear gate-drain capacitance (Cgdmax/Cgdmin) that set switching loss. Three terminals, not four. Runs on the coverage engine.',
+  },
+  {
+    id: 'M_VDMOS_P_POWER',
+    label: 'P-channel power MOSFET (200 V)',
+    kind: 'pvdmos',
+    model: 'VDMOS',
+    // Verbatim from examples/vdmos/100W.sp
+    params: 'pchan Vto=-4 Kp=8.8 Lambda=.003 Theta=0.08 ksubthres=.35 Rd=180m Rs=50m Rg=3 Rds=1e7 Cgdmax=1.25n Cgdmin=50p a=0.23 Cgs=1.15n Is=150p N=1.3 Rb=16m XTI=2 Cjo=1.3n Vj=0.8 m=0.5 tcvth=0.004 MU=-1.27 texp0=1.5 Rthjc=0.4 Cthj=5e-3',
+    source: 'ngspice examples/vdmos/100W.sp .model IRFP9240',
+    note: 'The p-channel complement, from the same complementary pair. Note `pchan` in the parameters — a VDMOS carries its polarity there rather than in the model type. Runs on the coverage engine.',
+  },
+  {
+    id: 'S_SWITCH_1V',
+    label: 'Voltage-controlled switch (1 V, hysteretic)',
+    kind: 'sw',
+    model: 'SW',
+    // Verbatim from examples/p-to-n-examples/switch-invs.lib
+    params: 'vt=1 vh=0.1 ron=1k roff=1e12',
+    source: 'ngspice examples/p-to-n-examples/switch-invs.lib .model swswitch',
+    note: 'Closes above 1.1 V and opens below 0.9 V — vh is HALF-width hysteresis either side of vt, not the full band. Runs on the interactive core.',
+  },
 ];
 
 const BY_ID = new Map(PARTS.map((p) => [p.id, p]));
 
+/**
+ * Parts contributed by a library the USER downloaded (see `model-library.js`).
+ *
+ * Kept in a separate list from `PARTS`, deliberately. The built-in parts above
+ * are Modified BSD, individually validated against this solver, and shipped in
+ * this repository. Downloaded parts are none of those things: they are
+ * third-party vendor cards on the user's machine, unvalidated, and not ours to
+ * redistribute. Merging the two lists would lose that distinction at exactly
+ * the moment it matters — when deciding what may be committed or exported.
+ *
+ * Mutated IN PLACE, never rebound: the editor captures these collections at
+ * import time, and reassigning the export would leave it reading a stale array
+ * (the same rule `COLORS` and `SERIES` follow in `render.js`).
+ */
+/** @type {Part[]} */
+export const LIBRARY_PARTS = [];
+
+const REGISTERED = new Map();
+
+/** SpiceLab symbol kind for a SPICE `.model` type token, or null when this
+ *  core has no fixed symbol for it. A null is not a rejection — the part is
+ *  still reachable through a Subcircuit or SPICE text block, and ngspice
+ *  implements far more device types than the interactive core does. */
+export function kindForModelType(type, params = '') {
+  switch (String(type).trim().toUpperCase()) {
+    case 'D': return 'diode';
+    case 'NPN': return 'npn';
+    case 'PNP': return 'pnp';
+    case 'NMOS': return 'nmos';
+    case 'PMOS': return 'pmos';
+    case 'NJF': return 'njf';
+    case 'PJF': return 'pjf';
+    // A VDMOS states its polarity as a FLAG in the parameter list rather than
+    // in the type token, so it is the one kind that cannot be decided from the
+    // type alone. Splitting it here rather than drawing one polarity-agnostic
+    // symbol is deliberate: it is what lets `Use for selected` keep refusing a
+    // mismatch, and a p-channel card dropped onto an n-channel symbol is the
+    // failure this project treats as the dangerous one — it simulates happily.
+    case 'VDMOS': return /(^|\s)pchan(\s|=|$)/i.test(params) ? 'pvdmos' : 'nvdmos';
+    // `SW` only. `VSWITCH` is PSpice's spelling of a DIFFERENT device: its
+    // thresholds are VON/VOFF where SW's are VT/VH, so mapping it here would
+    // hand the core a card whose thresholds it reads as absent — switching at
+    // 0 V instead of where the card says. The core refuses those outright.
+    case 'SW': return 'sw';
+    default: return null;
+  }
+}
+
+/**
+ * Register parts from a downloaded library.
+ *
+ * Ids are namespaced with a `lib:` prefix so a downloaded part can never
+ * collide with — or silently shadow — a built-in one. A saved document stores
+ * the id, so a document referring to `lib:2n2222@...` on a machine with no
+ * library installed must resolve to nothing and be REPORTED, rather than
+ * falling back to a different device that happens to share a name. That is the
+ * same rule ERC already applies to an unresolvable part id.
+ */
+export function registerLibraryParts(parts) {
+  let added = 0;
+  for (const p of parts) {
+    if (!p?.id || REGISTERED.has(p.id)) continue;
+    REGISTERED.set(p.id, p);
+    LIBRARY_PARTS.push(p);
+    added++;
+  }
+  return added;
+}
+
+/** Drop every downloaded part. Used when the user removes the library. */
+export function clearLibraryParts() {
+  REGISTERED.clear();
+  LIBRARY_PARTS.length = 0;
+}
+
 export function getPart(id) {
-  return BY_ID.get(id) ?? null;
+  return BY_ID.get(id) ?? REGISTERED.get(id) ?? null;
 }
 
-/** Parts usable for a given symbol type. */
+/** Parts usable for a given symbol type.
+ *
+ *  Built-ins come first: they are the validated, curated set, and a search
+ *  through 50,000 downloaded cards should not bury the sensible default. */
 export function partsFor(kind) {
-  return PARTS.filter((p) => p.kind === kind);
+  return [
+    ...PARTS.filter((p) => p.kind === kind),
+    ...LIBRARY_PARTS.filter((p) => p.kind === kind),
+  ];
 }
 
-/** The part used when the user has not chosen one. */
+/** The part used when the user has not chosen one. Always a built-in when one
+ *  exists, so the default never depends on what happens to be downloaded. */
 export function defaultPartFor(kind) {
-  return partsFor(kind)[0] ?? null;
+  return PARTS.find((p) => p.kind === kind) ??
+         LIBRARY_PARTS.find((p) => p.kind === kind) ?? null;
 }
 
 /** The `.model` card text for a part, under a given model name. */
 export function modelCard(part, name) {
   return `.model ${name} ${part.model} (${part.params})`;
+}
+
+/**
+ * The SPICE model name to emit for a part.
+ *
+ * Built-in ids (`D_SIGNAL`) are already legal SPICE tokens and are emitted
+ * unchanged, so netlists produced before this existed are byte-identical.
+ *
+ * A downloaded part's id is not: it carries its provenance —
+ * `lib:1n4148@Models/Diode/DIODE2.lib#99` — and `:`, `@`, `/`, `.` and `#` are
+ * not name characters. Emitting it raw produced
+ * `.model lib:1n4148@Models/Diode/DIODE2.lib#99 D (...)`, which is simply a
+ * broken netlist. The id still has to stay the provenance-bearing key, because
+ * that is what a saved document stores, so the SPICE name is DERIVED from it.
+ *
+ * The hash suffix is not decoration. This library defines `2n2222` in five
+ * different files with different parameters; without it, two parts sourced
+ * from different files would emit the same `.model` name and one would
+ * silently win — the same circuit simulating as a different one.
+ */
+export function modelName(part) {
+  if (!part.id.startsWith('lib:')) return part.id;
+  const base = (/^lib:([^@]*)/.exec(part.id)?.[1] || 'model')
+    .replace(/[^A-Za-z0-9_]/g, '_');
+  return `${base}_${hash36(part.id)}`;
+}
+
+/** FNV-1a, base36. Short, stable across sessions, and dependency-free — it
+ *  only has to separate names, not resist anything. */
+function hash36(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
 }

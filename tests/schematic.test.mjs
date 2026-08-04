@@ -16,6 +16,8 @@ import { extractNets, netAt, netNameOfPin, onSegmentInterior } from '../src/sche
 import { checkErc, hasBlockingErrors } from '../src/schematic/erc.js';
 import { toNetlist } from '../src/schematic/emit.js';
 import { PARTS, getPart, partsFor } from '../src/schematic/parts.js';
+import { ART } from '../src/schematic/render.js';
+import { SYMBOLS, isDirective } from '../src/schematic/model.js';
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -339,9 +341,39 @@ console.log('\nEvery palette part emits a simulatable netlist');
     return (n) => row[1 + L.indexOf(n)];
   };
 
+  // Parts whose device the INTERACTIVE core does not implement, so there is no
+  // honest bias check to run here — they route to ngspice, and that is where
+  // they are checked (tests/ngspice-diff.test.mjs). Named explicitly rather
+  // than skipped by a default branch, so adding a part to a kind that has no
+  // check cannot pass silently: the assertion below fails on an unknown kind.
+  const COVERAGE_ONLY = new Set(['njf', 'pjf', 'nvdmos', 'pvdmos']);
+
   let bad = null;
   for (const p of PARTS) {
     try {
+      if (COVERAGE_ONLY.has(p.kind)) {
+        // Still assert the claim the part makes about itself: a VDMOS states
+        // its polarity in the parameters, and getting that backwards would put
+        // a p-channel card on an n-channel symbol.
+        if (p.kind === 'pvdmos' && !/\bpchan\b/i.test(p.params)) {
+          bad = `${p.id}: p-channel part without pchan in its card`;
+        } else if (p.kind === 'nvdmos' && /\bpchan\b/i.test(p.params)) {
+          bad = `${p.id}: n-channel part whose card says pchan`;
+        }
+        continue;
+      }
+      if (p.kind === 'sw') {
+        // The switch must actually switch, and must do it at the threshold the
+        // card states rather than at 0 V. Control below vt-vh: open, so the
+        // divider sits at the source. Above vt+vh: closed, so it collapses.
+        const rig = (vc) => solveOp(
+          ['t', 'V1 in 0 DC 5', `VC c 0 DC ${vc}`, 'R1 in a 100k',
+           'S1 a 0 c 0 M', `.model M ${p.model} (${p.params})`, '.end'].join('\n'));
+        const open = rig(0)('a'), closed = rig(5)('a');
+        if (!(open > 4.9)) bad = `${p.id}: control low, V(a) = ${open} (not open)`;
+        else if (!(closed < 0.2)) bad = `${p.id}: control high, V(a) = ${closed} (not closed)`;
+        continue;
+      }
       if (p.kind === 'diode') {
         // 5 V through 1k: the forward drop must be physical for a junction.
         const v = solveOp(['t', 'V1 in 0 DC 5', 'R1 in a 1k', 'D1 a 0 M',
@@ -358,7 +390,7 @@ console.log('\nEvery palette part emits a simulatable netlist');
         // The stage must actually amplify: the drain has to sit inside the
         // rails, not pinned at either end.
         if (!(vd > 0.05 && vd < 4.95)) bad = `${p.id}: V(d) = ${vd} (not in rail)`;
-      } else {
+      } else if (p.kind === 'npn' || p.kind === 'pnp') {
         // Common-emitter bias, polarity flipped for PNP.
         const sgn = p.kind === 'npn' ? 1 : -1;
         const v = solveOp(['t', `VCC vcc 0 DC ${12 * sgn}`, 'RB vcc b 470k',
@@ -369,11 +401,34 @@ console.log('\nEvery palette part emits a simulatable netlist');
         if (!(vbe > 0.4 && vbe < 1.0)) bad = `${p.id}: Vbe = ${vbe}`;
         else if (!(vc > 0 && vc < 12)) bad = `${p.id}: Vc = ${vc} (not in rail)`;
         else if (!(ic > 0)) bad = `${p.id}: Ic = ${ic}`;
+      } else {
+        // No default branch. This loop used to end in a bare `else` that ran
+        // the BJT rig, so a part of any new kind would have been biased as a
+        // transistor and, if it happened to pass, reported as validated. That
+        // is the same shape as the `_` arm this session removed from the Rust
+        // model readers: an unrecognised case silently treated as the default.
+        bad = `${p.id}: kind '${p.kind}' has no bias check in this suite`;
       }
     } catch (e) { if (!bad) bad = `${p.id}: ${e.message}`; }
     if (bad) break;
   }
   check('every library part parses AND biases physically', bad === null, bad ?? '');
+
+  // Every device symbol needs its own drawing. `drawComponent` used to fall
+  // back to `ART.resistor` for a type with no art, so adding a device and
+  // forgetting the drawing showed a RESISTOR where a transistor is — the
+  // picture disagreeing with the netlist, which is precisely what drawing
+  // through the same transform as `pinPositions` exists to prevent. The
+  // fallback is now a crossed box that cannot be mistaken for a component,
+  // and this check means it should never be reached.
+  //
+  // Directives and subcircuits are excluded because the renderer draws them
+  // through their own paths (`_drawDirective`, `_drawSubckt`), not through ART.
+  const needsArt = Object.keys(SYMBOLS)
+    .filter((t) => !isDirective(t) && t !== 'subckt');
+  check('every device symbol has its own drawing',
+        needsArt.every((t) => typeof ART[t] === 'function'),
+        JSON.stringify(needsArt.filter((t) => typeof ART[t] !== 'function')));
 
   // Provenance must stay attached: these are redistributed under ngspice's
   // Modified BSD, which requires attribution.
@@ -575,6 +630,46 @@ console.log('\nSubcircuit instances');
   check('emits an X card naming the subcircuit', /^X1 .* OPA$/m.test(out.netlist), out.netlist);
   check('with one node per declared pin',
         (out.netlist.match(/^X1 (\S+) (\S+) (\S+) OPA$/m) ?? []).length === 4, out.netlist);
+
+  // A macromodel goes from the downloaded library to an emitted X card with
+  // its pin order intact and NOTHING retyped in between.
+  //
+  // The editor used to place only the text block and instruct the user to
+  // create a Subcircuit and re-enter the pin list "in declaration order". That
+  // was the most dangerous step in the flow: pin order is the netlist
+  // contract, transposing two pins wires the part differently and simulates
+  // perfectly happily, and the correct order had already been parsed off the
+  // `.subckt` line. This asserts the order survives the whole path, which is
+  // the property that made the manual step worth deleting.
+  {
+    const { parseDefinitions } = await import('../src/schematic/model-library.js');
+    // Vendor shape: continuation lines, a PARAMS: list, CRLF, mixed case.
+    const src = [
+      '* a vendor macromodel',
+      '.SUBCKT OP_AMP_X 3 2 7 4 6 PARAMS: GBW=10Meg',
+      'R1 3 2 1meg',
+      '.ENDS',
+    ].join('\r\n');
+    const def = parseDefinitions(src, 'Models/Manufacturer/X/opamp.lib')
+      .find((d) => d.kind === 'subckt');
+    check('the library parses the macromodel', !!def, JSON.stringify(def));
+    check('and recovers its pins in declaration order',
+          def.pins.join(' ') === '3 2 7 4 6', JSON.stringify(def?.pins));
+
+    // Exactly what the editor now does with that record.
+    const s5 = new Schematic();
+    s5.add('subckt', 0, 0, {
+      ref: 'X1', props: { name: def.name, pins: def.pins.join(' ') },
+    });
+    s5.add('ground', 0, 200);
+    const card = toNetlist(s5).netlist.split('\n').find((l) => l.startsWith('X1'));
+    check('the placed instance has one node per declared pin',
+          card.split(/\s+/).length === 7, card);
+    check('and names the subcircuit the library found',
+          card.endsWith(def.name), card);
+    check('the pin count survives the round trip',
+          pinsOf(s5.components[0]).length === def.pins.length, card);
+  }
 
   // A subcircuit has no value field, like a semiconductor.
   check('no missing-value error for a subcircuit',

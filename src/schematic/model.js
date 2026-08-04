@@ -64,6 +64,89 @@ export const SYMBOLS = {
       { name: 'B', x: 20, y: 0 },
     ],
   },
+  /**
+   * Junction FETs, `J<name> D G S <model>`.
+   *
+   * Three terminals, unlike the MOSFET's four — a JFET has no bulk, and adding
+   * a fourth pin "for symmetry" would put the model name in the node list and
+   * every JFET netlist would be malformed.
+   *
+   * The interactive core does not implement element `J`, so these route to
+   * ngspice. That is the two-engine design working as intended rather than a
+   * limitation: 4,804 JFET cards in the KiCad library become usable, and the
+   * editor reports which engine ran.
+   */
+  njf: {
+    prefix: 'J',
+    pins: [
+      { name: 'D', x: 20, y: -20 },
+      { name: 'G', x: -20, y: 0 },
+      { name: 'S', x: 20, y: 20 },
+    ],
+  },
+  pjf: {
+    prefix: 'J',
+    pins: [
+      { name: 'D', x: 20, y: -20 },
+      { name: 'G', x: -20, y: 0 },
+      { name: 'S', x: 20, y: 20 },
+    ],
+  },
+
+  /**
+   * Power MOSFETs, `M<name> D G S <model>` against a `.model ... VDMOS`.
+   *
+   * Three terminals where the level 1/3 MOSFET has four: a VDMOS's body diode
+   * is intrinsic to the model, so the substrate is not a separate node. Same
+   * card letter, different arity — which is exactly why the model TYPE has to
+   * be checked, and now is.
+   *
+   * Polarity is carried by the card's `pchan` flag rather than by the type
+   * token, so `partsFromDefs` reads it and assigns `nvdmos` or `pvdmos`. That
+   * keeps the existing safety rule usable: `Use for selected` refuses a kind
+   * mismatch, and without the split a p-channel card would drop onto an
+   * n-channel symbol and simulate happily.
+   */
+  nvdmos: {
+    prefix: 'M',
+    pins: [
+      { name: 'D', x: 20, y: -20 },
+      { name: 'G', x: -20, y: 0 },
+      { name: 'S', x: 20, y: 20 },
+    ],
+  },
+  pvdmos: {
+    prefix: 'M',
+    pins: [
+      { name: 'D', x: 20, y: -20 },
+      { name: 'G', x: -20, y: 0 },
+      { name: 'S', x: 20, y: 20 },
+    ],
+  },
+
+  /**
+   * Voltage-controlled switch, `S<name> N+ N- NC+ NC- <model>`.
+   *
+   * The interactive core implements this device; it simply had no symbol, so
+   * the one nonlinear element available for behavioural modelling — comparator
+   * thresholds, Schmitt triggers, ideal switching — was reachable only by
+   * typing a netlist.
+   *
+   * Only `.model ... SW` maps here. `VSWITCH` is the PSpice spelling and is a
+   * DIFFERENT device: it states thresholds as VON/VOFF where SW uses VT/VH, so
+   * a VSWITCH card read as an SW would take vt=vh=0 from the defaults and
+   * switch at 0 V. The core refuses it; see `check_model_kind` in build.rs.
+   */
+  sw: {
+    prefix: 'S',
+    pins: [
+      { name: '+', x: -20, y: -20 },
+      { name: '-', x: 20, y: -20 },
+      { name: 'C+', x: -20, y: 20 },
+      { name: 'C-', x: 20, y: 20 },
+    ],
+  },
+
   /** Ground reference. One pin; forces its net to node 0. */
   ground: { prefix: 'GND', pins: [{ name: '1', x: 0, y: 0 }], ground: true },
 

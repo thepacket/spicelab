@@ -22,6 +22,14 @@
  * `Import model file…` does the download-to-canvas step in one go, reading the
  * file locally — it is never uploaded anywhere.
  *
+ * There is also a bulk path: **Download KiCad Spice Library…** fetches that
+ * whole collection into the user's browser on one explicit action and keeps it
+ * in IndexedDB (`model-library.js`, `model-store.js`). That does not weaken
+ * the rule above, it applies it — the models are pulled from GitHub by the
+ * USER'S browser and stored on the user's machine. SpiceLab never holds,
+ * serves or redistributes a byte of them, exactly as if they had cloned the
+ * repository themselves.
+ *
  * ## `licence` values
  *
  *   'permissive'  redistributable; we could bundle it if we wanted to
@@ -50,7 +58,7 @@ export const MODEL_SOURCES = [
   {
     name: 'KiCad Spice Library',
     url: 'https://github.com/kicad-spice-library/KiCad-Spice-Library',
-    what: '50,093 models — 97,187 .model cards and 38,898 .subckt macromodels',
+    what: '154,009 definitions — 106,210 .model cards and 47,799 .subckt macromodels',
     licence: 'mixed',
     verified: true,
     note: 'The largest collection there is, and the best proxy for real vendor ' +

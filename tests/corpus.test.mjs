@@ -48,6 +48,19 @@ const wasm = require('../src/wasm-node/spicelab_wasm.js');
  *
  * The budgets are ratchets. A number above zero is a list of known gaps, not
  * an acceptance of them; lower it whenever one is fixed, and never raise it.
+ *
+ * `minOk` is the opposite ratchet — a floor on how many netlists build cleanly,
+ * so a change that quietly stops accepting valid SPICE is caught. Raise it when
+ * coverage improves; lowering it needs a reason written down, because the
+ * obvious way to satisfy a floor is to accept things you should not.
+ *
+ * It has been lowered once, and that reason is the point of the whole file.
+ * ngspice's floor was 61 until the `.model` TYPE guard landed: 41 of those 61
+ * are CIDER netlists using `NBJT`, `NUMOS` and `NUMD`, ngspice's NUMERICAL
+ * device models — a mesh-based physical simulation with nothing in common with
+ * Gummel-Poon or Shichman-Hodges. This core was reading them as ordinary BJTs
+ * and MOSFETs and reporting that they parsed cleanly. They were never `ok`;
+ * they were false positives, and 20 is what the honest count always was.
  */
 const CORPORA = [
   {
@@ -59,6 +72,7 @@ const CORPORA = [
     pattern: /\.(cir|net|sp|deck)$/i,
     maxBytes: Infinity,
     budget: 0,
+    minOk: 20,
     hint: 'npm run build:ngspice  (or set NGSPICE_SRC)',
   },
   {
@@ -73,6 +87,7 @@ const CORPORA = [
     pattern: /\.cir$/i,
     maxBytes: 3072,
     budget: 150,
+    minOk: 1200,
     hint: 'git clone --depth 1 https://github.com/Xyce/Xyce_Regression .xyce-regression',
   },
 ];
@@ -128,7 +143,8 @@ for (const c of CORPORA) {
               `unresolved ${kinds.unresolved}   invalid ${kinds.invalid}`);
 
   check(`${c.id}: corpus found and read`, files.length > 300, `${files.length} files`);
-  check(`${c.id}: something parses cleanly`, kinds.ok > 20, `${kinds.ok} ok`);
+  check(`${c.id}: at least ${c.minOk} build cleanly`, kinds.ok >= c.minOk,
+        `${kinds.ok} ok`);
   check(`${c.id}: at most ${c.budget} called invalid`, invalid.length <= c.budget,
         `${invalid.length} > ${c.budget}:\n` +
         invalid.slice(0, 20)

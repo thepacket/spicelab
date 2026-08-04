@@ -14,3 +14,4 @@ src/ngspice/
 
 # Fetched by hand for tests/corpus.test.mjs; not vendored.
 .xyce-regression/
+.kicad-library/

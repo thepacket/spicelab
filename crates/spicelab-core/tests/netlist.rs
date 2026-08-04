@@ -8,7 +8,7 @@
 use spicelab_core::analyses::dc::{ac_sweep, bode, op};
 use spicelab_core::analyses::tran::tran;
 use spicelab_core::netlist::{
-    ac_spec, build, flatten, parse, parse_with, tran_options, Analysis,
+    ac_spec, build, flatten, parse, parse_with, tran_options, Analysis, ErrorKind,
 };
 use std::f64::consts::PI;
 
@@ -513,6 +513,62 @@ fn unsupported_mosfet_level_is_rejected() {
             e.message.contains("LEVEL") && e.message.contains("only LEVEL 1"),
             "{lvl}: unhelpful message: {}",
             e.message
+        );
+    }
+}
+
+/// A `.model` card's TYPE must match the device that references it.
+///
+/// Every model reader used to pick behaviour with a match ending in `_`, so an
+/// unrecognised type silently became the default. `M1 ... SOMEVDMOS` was read
+/// as a LEVEL 1 Shichman-Hodges MOSFET, and `LPNP` — which vendor op-amp
+/// macromodels use for the lateral PNP — was read as an NPN. Neither errored.
+///
+/// The card's own parameters cannot save you, because unknown model parameters
+/// are deliberately ignored as metadata (see the test below, which is the rule
+/// that makes vendor cards loadable at all). So a VDMOS's `rg` and `mtriode`
+/// are dropped and its `vto`/`kp` are fed to equations they do not belong to.
+///
+/// This matters at scale: the KiCad Spice Library carries 4,372 VDMOS cards —
+/// the power FETs — plus 2,326 NJF, 2,478 PJF and 3,311 VSWITCH.
+///
+/// The verdict must be `Unsupported`, not `Invalid`: these are perfectly
+/// ordinary SPICE models that ngspice implements, so the netlist has to stay
+/// eligible for the coverage engine rather than being called malformed.
+#[test]
+fn mismatched_model_type_is_rejected() {
+    // (element line, model card, the type token that should be reported)
+    let cases: &[(&str, &str, &str)] = &[
+        ("M1 dd g 0 0 QM", ".model QM VDMOS (VTO=4 KP=2 RG=3 MTRIODE=0.5)", "VDMOS"),
+        ("M1 dd g 0 0 QM", ".model QM PMOS (VTO=-1 KP=2e-5)", ""), // legal, see below
+        ("Q1 dd g 0 QM", ".model QM LPNP (IS=1e-16 BF=150)", "LPNP"),
+        ("Q1 dd g 0 QM", ".model QM NJF (VTO=-2 BETA=1e-3)", "NJF"),
+        ("D1 dd 0 QM", ".model QM NPN (IS=1e-16)", "NPN"),
+        ("S1 dd 0 g 0 QM", ".model QM VSWITCH (RON=1 ROFF=1e6 VON=2 VOFF=1)", "VSWITCH"),
+    ];
+
+    for (elem, card, expect) in cases {
+        let text = format!("t\nVDD dd 0 5\nVG g 0 3\n{elem}\n{card}\n.end");
+        let nl = parse(&text).unwrap();
+        let res = build(&nl);
+        if expect.is_empty() {
+            assert!(res.is_ok(), "{card}: a matching type must still build");
+            continue;
+        }
+        let e = match res {
+            Ok(_) => panic!("{card} was silently accepted by `{elem}`"),
+            Err(e) => e,
+        };
+        assert!(
+            e.message.contains(expect),
+            "{card}: message does not name the offending type: {}",
+            e.message
+        );
+        assert_eq!(
+            e.kind,
+            ErrorKind::Unsupported,
+            "{card}: must stay eligible for the coverage engine, not be \
+             called malformed"
         );
     }
 }

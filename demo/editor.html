@@ -110,6 +110,26 @@
      is block-level and full-width `input` would otherwise stretch the box. */
   label.check { display: flex; align-items: center; gap: .4rem; }
   label.check input { width: auto; flex: none; }
+  /* Downloaded-library panel. Theme-aware via the same custom properties as
+     everything else — a hard-coded colour here would survive the theme toggle
+     and leave a light strip on the dark page. */
+  #lib-dl { margin-top: .4rem; }
+  #lib-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  #lib-dl .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+  #lib-results { max-height: 190px; overflow-y: auto; }
+  #lib-kinds { display: flex; flex-wrap: wrap; gap: .25rem; margin: .35rem 0; }
+  #lib-kinds button {
+    width: auto; flex: 0 0 auto; font-size: 10px; padding: .2rem .4rem;
+    background: transparent; color: var(--muted); border: 1px solid var(--line);
+  }
+  #lib-kinds button.on { color: var(--fg); border-color: var(--accent); }
+  #lib-kinds button b { color: var(--fg); font-weight: 600; }
+  .hit { padding: .3rem 0; border-bottom: 1px solid var(--line); }
+  .hit .nm { color: var(--fg); font-size: 12px; }
+  .hit .src { color: var(--muted); font-size: 10px; word-break: break-all; }
+  .hit .row { margin-top: .2rem; }
+  .hit button { font-size: 10px; padding: .15rem .3rem; }
+  button.ghost { background: transparent; color: var(--muted); }
   .row { display: flex; gap: .3rem; }
   .row button { width: auto; flex: 1; text-align: center; }
   .muted { color: var(--muted); }
@@ -166,6 +186,9 @@
   <button data-place="isource">I source</button>
   <button data-place="npn">NPN</button>
   <button data-place="nmos">NMOS</button>
+  <button data-place="njf">JFET</button>
+  <button data-place="nvdmos">Power FET</button>
+  <button data-place="sw">Switch</button>
   <button data-place="ground">Ground</button>
 
   <h2>Blocks</h2>
@@ -245,6 +268,34 @@
   </div>
   <input type="file" id="model-file" accept=".lib,.sub,.mod,.cir,.net,.txt,.spi"
          style="display:none">
+
+  <!-- Downloading a whole third-party library. Deliberately explicit about
+       being a network fetch from GitHub, and about the licence: the models
+       are free to download and use, and are NOT redistributed by SpiceLab. -->
+  <div id="lib-dl">
+    <div class="what" id="lib-state">checking for a downloaded library…</div>
+    <div class="row">
+      <button id="lib-get">Download KiCad Spice Library…</button>
+    </div>
+    <!-- What the download actually gave you, per symbol kind. Without this the
+         library was invisible: parts were registered and reachable only by
+         guessing a name into the search box. Each chip filters the list below
+         it, which is the only way to BROWSE tens of thousands of parts — the
+         property dropdown deliberately does not list them. -->
+    <div id="lib-kinds" style="display:none"></div>
+    <div class="row" id="lib-search-row" style="display:none">
+      <input id="lib-q" placeholder="search by name — e.g. tl072, irf540, 1n4148">
+    </div>
+    <div id="lib-results"></div>
+    <div class="row" id="lib-remove-row" style="display:none">
+      <button id="lib-clear" class="ghost">Remove downloaded library</button>
+    </div>
+    <div id="lib-progress" style="display:none">
+      <div class="bar"><div id="lib-bar"></div></div>
+      <div class="what" id="lib-pct"></div>
+      <div class="row"><button id="lib-cancel" class="ghost">Cancel</button></div>
+    </div>
+  </div>
   <details id="libs"><summary>where to get models and circuits</summary>
     <div id="libs-body"></div>
   </details>
@@ -260,7 +311,13 @@ import { probeColor } from '../src/instruments/probe.js';
 import { MODEL_SOURCES, CIRCUIT_SOURCES, LICENCE_NOTE } from '../src/schematic/libraries.js';
 import { Editor } from '../src/schematic/editor.js';
 import { toNetlist } from '../src/schematic/emit.js';
-import { defaultPartFor, getPart, partsFor } from '../src/schematic/parts.js';
+import { defaultPartFor, getPart, partsFor, kindForModelType,
+         registerLibraryParts, clearLibraryParts,
+         LIBRARY_PARTS } from '../src/schematic/parts.js';
+import { listLibraryFiles, downloadLibrary, partsFromDefs,
+         LIBRARY } from '../src/schematic/model-library.js';
+import { storageAvailable, libraryMeta, saveLibrary, clearLibrary, lookup,
+         searchNames, definitionText, modelDefsForParts } from '../src/schematic/model-store.js';
 import { extractNets, netAt } from '../src/schematic/nets.js';
 import { SimClient } from '../src/worker/client.js';
 import { Probe, ProbeKind, ProbeSet } from '../src/instruments/probe.js';
@@ -501,11 +558,26 @@ function refresh() {
       // Semiconductors get a part picker instead of a value box: their
       // behaviour comes from a .model card, not a number.
       const cur = c.props.part ?? defaultPartFor(c.type)?.id;
-      html += `<label>Part</label><select id="p-part">${parts.map((p) =>
-        `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${p.label}</option>`,
+      // Built-ins only, plus whatever this component is actually set to.
+      //
+      // A downloaded library contributes tens of thousands of parts of a
+      // single kind, and rendering those into a <select> builds tens of
+      // thousands of DOM nodes every time the selection changes — the panel
+      // stops responding, and the list is useless to scroll anyway. The
+      // library is reached by SEARCH instead (Model libraries -> search), and
+      // "Use for selected" there assigns one to this symbol.
+      const shown = parts.filter((p) => !p.id.startsWith('lib:') || p.id === cur);
+      const extra = parts.length - shown.length;
+      html += `<label>Part</label><select id="p-part">${shown.map((p) =>
+        `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${esc(p.label)}</option>`,
       ).join('')}</select>`;
+      if (extra > 0) {
+        html += `<div class="note">${extra.toLocaleString()} more from the ` +
+                `downloaded library — find them with the search under ` +
+                `<b>Model libraries</b>.</div>`;
+      }
       const note = getPart(cur)?.note;
-      if (note) html += `<div class="note">${note}</div>`;
+      if (note) html += `<div class="note">${esc(note)}</div>`;
     } else {
       html += `<label>Value</label><input id="p-val" value="${c.value ?? ''}">`;
     }
@@ -675,22 +747,34 @@ function paramFields(c) {
 document.getElementById('import-model').onclick = () =>
   document.getElementById('model-file').click();
 
+/**
+ * Drop SPICE text onto the canvas as a text block.
+ *
+ * Shared by the local-file import and the downloaded library, so a model
+ * arrives on the canvas the same way whichever route it came by — and there is
+ * one place that gets the placement right.
+ */
+function dropSpiceBlock(text, name) {
+  editor.commit();
+  // Placed BELOW whatever is already drawn. Dropping it at the origin puts a
+  // large text block straight on top of the circuit, which is what the first
+  // version did.
+  const ys = editor.sch.components.map((k) => k.y);
+  const xs = editor.sch.components.map((k) => k.x);
+  const x = xs.length ? Math.min(...xs) : 0;
+  const y = ys.length ? Math.max(...ys) + 80 : 0;
+  const c = editor.sch.add('spice', x, y, { props: { text: text.trim() } });
+  if (name) c.ref = name.replace(/\.[^.]+$/, '').slice(0, 24) || c.ref;
+  editor._changed();
+  return c;
+}
+
 document.getElementById('model-file').onchange = async (ev) => {
   const file = ev.target.files?.[0];
   if (!file) return;
   try {
     const text = await file.text();
-    editor.commit();
-    // Placed BELOW whatever is already drawn. Dropping it at the origin puts a
-    // large text block straight on top of the circuit, which is what the first
-    // version did.
-    const ys = editor.sch.components.map((k) => k.y);
-    const xs = editor.sch.components.map((k) => k.x);
-    const x = xs.length ? Math.min(...xs) : 0;
-    const y = ys.length ? Math.max(...ys) + 80 : 0;
-    const c = editor.sch.add('spice', x, y, { props: { text: text.trim() } });
-    c.ref = file.name.replace(/\.[^.]+$/, '').slice(0, 24) || c.ref;
-    editor._changed();
+    dropSpiceBlock(text, file.name);
     const subs = [...text.matchAll(/^\s*\.subckt\s+(\S+)([^\n]*)/gim)];
     status(subs.length
       ? `imported ${file.name} — defines ${subs.length} subcircuit(s): ` +
@@ -703,6 +787,350 @@ document.getElementById('model-file').onchange = async (ev) => {
     ev.target.value = '';
   }
 };
+
+// ------------------------------------------------- downloaded model library
+//
+// One explicit user action downloads the whole KiCad Spice Library — every
+// file under `Models/`, not the subset its own index lists — parses it here,
+// and stores it in IndexedDB so it happens once. See the header of
+// model-library.js for why nothing is bundled and why it is 2,073 requests
+// rather than one archive.
+{
+  const el = (id) => document.getElementById(id);
+  const stateEl = el('lib-state');
+  let abort = null;
+
+  const fmtMB = (n) => (n / 1048576).toFixed(1) + ' MB';
+
+  async function refreshState() {
+    if (!storageAvailable()) {
+      stateEl.textContent =
+        'This browser cannot store a downloaded library (no IndexedDB). ' +
+        'Import model file… still works for single files.';
+      el('lib-get').disabled = true;
+      return;
+    }
+    const meta = await libraryMeta();
+    const have = !!meta;
+    el('lib-search-row').style.display = have ? '' : 'none';
+    el('lib-remove-row').style.display = have ? '' : 'none';
+    el('lib-get').textContent = have
+      ? 'Re-download KiCad Spice Library…'
+      : 'Download KiCad Spice Library…';
+    stateEl.innerHTML = have
+      ? `<b>${meta.names.toLocaleString()}</b> model names from
+         <b>${meta.definitions.toLocaleString()}</b> definitions across
+         ${meta.files.toLocaleString()} files, stored in this browser.
+         Downloaded ${new Date(meta.installedAt).toLocaleDateString()}.`
+      : `Fetches ~66 MB from GitHub into this browser — a network request to a
+         third party, made once. The models are free to download and use but
+         are <b>not redistributable</b>, so SpiceLab never bundles or uploads
+         them; your browser fetches them exactly as cloning the repo would.`;
+    if (have) await loadPartsFromStore();
+  }
+
+  /** Register downloaded `.model` cards as placeable parts. */
+  async function loadPartsFromStore() {
+    // Only the model cards become parts, and only those whose type this editor
+    // draws a symbol for. Reading every definition back would pull the whole
+    // library out of storage; `defsForParts` walks the index only.
+    try {
+      const defs = await modelDefsForParts();
+      clearLibraryParts();
+      const added = registerLibraryParts(partsFromDefs(defs, kindForModelType));
+      if (added) refresh();
+      showKinds();
+      return added;
+    } catch (e) {
+      console.warn('could not register library parts:', e);
+      return 0;
+    }
+  }
+
+  /**
+   * What the library gave you, by symbol kind — and the way to browse it.
+   *
+   * The download used to leave no trace in the UI at all: parts were
+   * registered and then reachable only by guessing a name into the search box,
+   * so a user who did not already know what was in there could not find out.
+   * A count per kind is the honest answer to "what did I just get", and it is
+   * derived from the registered parts rather than written down, so it cannot
+   * claim coverage the code does not have.
+   */
+  const KIND_LABEL = {
+    diode: 'Diodes', npn: 'NPN', pnp: 'PNP', nmos: 'NMOS', pmos: 'PMOS',
+    njf: 'N-JFET', pjf: 'P-JFET', nvdmos: 'N power FET', pvdmos: 'P power FET',
+    sw: 'Switches',
+  };
+  let kindFilter = null;
+
+  function showKinds() {
+    const box = el('lib-kinds');
+    const counts = new Map();
+    for (const p of LIBRARY_PARTS) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+    if (!counts.size) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    box.innerHTML = [...counts]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `<button data-kind="${esc(k)}"${k === kindFilter ? ' class="on"' : ''}>${
+        esc(KIND_LABEL[k] ?? k)} <b>${n.toLocaleString()}</b></button>`)
+      .join('');
+    for (const b of box.querySelectorAll('button[data-kind]')) {
+      b.onclick = () => {
+        kindFilter = kindFilter === b.dataset.kind ? null : b.dataset.kind;
+        showKinds();
+        if (kindFilter) browseKind(kindFilter); else runSearch();
+      };
+    }
+  }
+
+  /**
+   * List parts of one kind.
+   *
+   * Capped, and the cap is REPORTED. Building 51,533 rows of DOM freezes the
+   * panel and would be unusable even if it did not — the same reason the
+   * property dropdown does not list downloaded parts. Browsing tells you what
+   * shape the library has; search is how you find a specific part.
+   */
+  const BROWSE_LIMIT = 60;
+  function browseKind(kind) {
+    const all = LIBRARY_PARTS.filter((p) => p.kind === kind);
+    const shown = all.slice(0, BROWSE_LIMIT);
+    el('lib-results').innerHTML = shown.map((p) => `<div class="hit">
+        <div class="nm">${esc(p.label.split(' — ')[0])}</div>
+        <div class="src">${esc(p.label.split(' — ')[1] ?? '')}</div>
+        <div class="row"><button data-part="${esc(p.id)}">Use for selected</button></div>
+      </div>`).join('') + (all.length > shown.length
+        ? `<div class="what">${(all.length - shown.length).toLocaleString()} more —
+           use the search box to find one by name.</div>`
+        : '');
+    for (const b of el('lib-results').querySelectorAll('button[data-part]')) {
+      b.onclick = () => assignPart(getPart(b.dataset.part));
+    }
+  }
+
+  el('lib-get').onclick = async () => {
+    if (abort) return;
+    abort = new AbortController();
+    el('lib-progress').style.display = '';
+    el('lib-get').disabled = true;
+    const t0 = performance.now();
+    try {
+      status('listing library files…');
+      const files = await listLibraryFiles({ signal: abort.signal });
+      const totalBytes = files.reduce((a, f) => a + f.size, 0);
+      stateEl.textContent =
+        `${files.length.toLocaleString()} files, ${fmtMB(totalBytes)} to fetch.`;
+
+      const res = await downloadLibrary({
+        files, signal: abort.signal, concurrency: 12,
+        onProgress: ({ done, total, fraction, bytes }) => {
+          el('lib-bar').style.width = (fraction * 100).toFixed(1) + '%';
+          el('lib-pct').textContent =
+            `${done.toLocaleString()} / ${total.toLocaleString()} files · ${fmtMB(bytes)}`;
+        },
+      });
+
+      el('lib-pct').textContent = 'storing…';
+      const meta = await saveLibrary({
+        files: res.files, defs: res.defs,
+        meta: { source: LIBRARY.home, ref: LIBRARY.ref, bytes: res.bytes },
+        onProgress: ({ phase, done, total }) => {
+          el('lib-pct').textContent = `storing ${phase}: ${done} / ${total}`;
+        },
+      });
+
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      const added = await loadPartsFromStore();
+      // Report failures rather than letting a partial library look complete.
+      status(`library installed: ${meta.names.toLocaleString()} names, ` +
+             `${added.toLocaleString()} placeable parts, ${fmtMB(res.bytes)} in ${secs}s` +
+             (res.failed.length ? ` — ${res.failed.length} file(s) failed` : ''));
+    } catch (e) {
+      status(e?.name === 'AbortError'
+        ? 'library download cancelled'
+        : 'library download failed: ' + e.message);
+    } finally {
+      abort = null;
+      el('lib-get').disabled = false;
+      el('lib-progress').style.display = 'none';
+      el('lib-bar').style.width = '0';
+      await refreshState();
+    }
+  };
+
+  el('lib-cancel').onclick = () => abort?.abort();
+
+  el('lib-clear').onclick = async () => {
+    await clearLibrary();
+    clearLibraryParts();
+    refresh();
+    el('lib-results').innerHTML = '';
+    el('lib-q').value = '';
+    kindFilter = null;
+    showKinds();
+    status('downloaded library removed');
+    await refreshState();
+  };
+
+  // Search. Debounced because each keystroke walks the whole key index.
+  let timer = 0;
+  el('lib-q').oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(runSearch, 120);
+  };
+
+  async function runSearch() {
+    const q = el('lib-q').value.trim();
+    const box = el('lib-results');
+    // Typing takes over from a kind filter, rather than silently intersecting
+    // with it and showing "no match" for a name that is plainly in there.
+    if (q && kindFilter) { kindFilter = null; showKinds(); }
+    if (!q) { box.innerHTML = ''; if (kindFilter) browseKind(kindFilter); return; }
+    let names;
+    try { names = await searchNames(q, 25); }
+    catch (e) { box.textContent = 'search failed: ' + e.message; return; }
+    if (!names.length) { box.innerHTML = '<div class="what">no match</div>'; return; }
+
+    const rows = [];
+    for (const name of names) {
+      const defs = await lookup(name);
+      const d = defs[0];
+      if (!d) continue;
+      const where = d.path.replace(/^Models\//, '');
+      const alt = defs.length > 1 ? ` · ${defs.length} sources` : '';
+      rows.push(`<div class="hit" data-name="${esc(name)}">
+        <div class="nm">${esc(name)} <span class="src">${esc(d.kind === 'subckt'
+          ? `.subckt (${d.pins.length} pins)` : `.model ${d.type}`)}${esc(alt)}</span></div>
+        <div class="src">${esc(where)}:${d.line}</div>
+        <div class="row"><button data-add="${esc(name)}">Add to canvas</button>${
+          d.kind === 'model' && kindForModelType(d.type, d.params)
+            ? `<button data-use="${esc(name)}">Use for selected</button>` : ''
+        }</div>
+      </div>`);
+    }
+    box.innerHTML = rows.join('');
+    for (const b of box.querySelectorAll('button[data-add]')) {
+      b.onclick = () => addFromLibrary(b.dataset.add);
+    }
+    for (const b of box.querySelectorAll('button[data-use]')) {
+      b.onclick = () => useForSelected(b.dataset.use);
+    }
+  }
+
+  /**
+   * Assign a downloaded model card to the selected symbol.
+   *
+   * This is the path that makes registered library parts reachable, since the
+   * property dropdown deliberately does not list tens of thousands of them.
+   * The kinds must MATCH — assigning a PNP card to an NPN symbol would simulate
+   * happily and answer wrongly, which is the failure mode this project treats
+   * as the dangerous one.
+   */
+  async function useForSelected(name) {
+    const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
+    if (sel.length !== 1) { status('select exactly one symbol first'); return; }
+    const c = sel[0];
+    const defs = await lookup(name);
+    const d = defs.find((x) => x.kind === 'model' &&
+                               kindForModelType(x.type, x.params));
+    if (!d) { status(`"${name}" has no model card with a symbol`); return; }
+    const kind = kindForModelType(d.type, d.params);
+    if (kind !== c.type) {
+      status(`"${name}" is a ${kind}, but ${c.ref} is a ${c.type} — not assigning`);
+      return;
+    }
+    // `lookup` returns the records stored UNDER a name, so they do not carry
+    // it — the name is the key. Without putting it back, every part built here
+    // came out as `lib:undefined@...`.
+    const part = partsFromDefs([{ ...d, name }], kindForModelType)[0];
+    if (!part) { status(`"${name}" could not be turned into a part`); return; }
+    registerLibraryParts([part]);
+    assignPart(part, d.path);
+  }
+
+  /**
+   * Put a library part on the selected symbol.
+   *
+   * The kinds must MATCH, and that check is the reason `kindForModelType`
+   * splits VDMOS on its `pchan` flag: a p-channel card on an n-channel symbol
+   * simulates perfectly happily and answers wrongly, which is the failure this
+   * project treats as the dangerous one.
+   */
+  function assignPart(part, from = '') {
+    if (!part) { status('that part is no longer registered'); return; }
+    const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
+    if (sel.length !== 1) { status('select exactly one symbol first'); return; }
+    const c = sel[0];
+    if (part.kind !== c.type) {
+      status(`that part is a ${part.kind}, but ${c.ref} is a ${c.type} — not assigning`);
+      return;
+    }
+    editor.commit();
+    c.props.part = part.id;
+    editor._changed();
+    refresh();
+    status(`${c.ref} now uses ${part.label}${from ? ` from ${from}` : ''}`);
+  }
+
+  /**
+   * Put one model on the canvas.
+   *
+   * The definition is dropped as a SPICE text block verbatim — this is someone
+   * else's card and the user is about to simulate it, so reformatting it would
+   * make the thing on the canvas differ from the thing in the library. A
+   * `.subckt` also reports its pin list, because pin ORDER is the netlist
+   * contract and it is what must be typed into a Subcircuit block.
+   */
+  async function addFromLibrary(name) {
+    try {
+      const defs = await lookup(name);
+      const d = defs[0];
+      if (!d) { status(`"${name}" is not in the downloaded library`); return; }
+      const text = await definitionText(d);
+      if (text == null) { status(`stored text for "${name}" is missing`); return; }
+      // Where the instance goes, measured BEFORE the text block is added —
+      // the block is deliberately placed below everything, so siting the
+      // instance relative to it drops the part back on top of the circuit.
+      const xs = editor.sch.components.map((k) => k.x);
+      const ys = editor.sch.components.map((k) => k.y);
+      const at = { x: xs.length ? Math.max(...xs) + 160 : 0,
+                   y: ys.length ? Math.min(...ys) : 0 };
+      dropSpiceBlock(text, name);
+
+      if (d.kind !== 'subckt') {
+        status(`added .model ${name} (${d.type}) from ${d.path}` +
+          (d.unterminated ? ' — note: this block is unterminated in the source file'
+                          : ''));
+        return;
+      }
+
+      // Place the instance too, with its pins already filled in.
+      //
+      // This used to stop at the text block and tell the user to place a
+      // Subcircuit and retype the pin list "in order". That instruction was
+      // the most dangerous step in the whole flow: pin ORDER is the netlist
+      // contract, a transposition wires the part differently and simulates
+      // perfectly happily, and we had already parsed the correct order out of
+      // the `.subckt` line. Asking a human to re-key data we hold is how you
+      // manufacture that error. 47,799 macromodels reach the canvas this way.
+      editor.sch.components.forEach((k) => editor.selected.delete(k.id));
+      const inst = editor.sch.add('subckt', at.x, at.y, {
+        props: { name, pins: d.pins.join(' ') },
+      });
+      editor.selected.add(inst.id);
+      editor._changed();
+      refresh();
+      status(`added ${inst.ref} = ${name} (${d.pins.join(' ')}) from ${d.path}` +
+             (d.unterminated
+               ? ' — note: this block is unterminated in the source file' : ''));
+    } catch (e) {
+      status('could not add model: ' + e.message);
+    }
+  }
+
+  refreshState();
+}
 
 function placedAnalysis(type) {
   return editor.sch.components.find((c) => c.type === type && c.enabled !== false) ?? null;

@@ -136,7 +136,7 @@ export function impliedJunctions(sch) {
 }
 
 /** Local-frame symbol art. Pins live at the coordinates declared in SYMBOLS. */
-const ART = {
+export const ART = {
   resistor(g) {
     g.beginPath();
     g.moveTo(0, -20); g.lineTo(0, -12);
@@ -203,6 +203,35 @@ const ART = {
   pnp(g) { bjt(g, true); },
   nmos(g) { mos(g, false); },
   pmos(g) { mos(g, true); },
+  njf(g) { jfet(g, false); },
+  pjf(g) { jfet(g, true); },
+  nvdmos(g) { vdmos(g, false); },
+  pvdmos(g) { vdmos(g, true); },
+  sw(g) {
+    g.beginPath();
+    g.moveTo(-20, -20); g.lineTo(-8, -20);    // N+ lead
+    g.moveTo(20, -20); g.lineTo(8, -20);      // N- lead
+    g.moveTo(-8, -20); g.lineTo(8, -27);      // the blade, drawn open
+    g.stroke();
+    g.beginPath(); g.arc(-8, -20, 1.8, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.arc(8, -20, 1.8, 0, Math.PI * 2); g.stroke();
+    // Control pair. It is a differential input — the switch responds to the
+    // voltage BETWEEN nc+ and nc- — so the two leads are drawn symmetrically
+    // and are NOT joined to each other; joining them would read as a short.
+    // The sense line to the blade is dashed because it carries no current, and
+    // drawing it solid reads as a fourth conducting terminal.
+    g.beginPath();
+    g.moveTo(-20, 20); g.lineTo(-6, 20);
+    g.moveTo(20, 20); g.lineTo(6, 20);
+    g.stroke();
+    g.save();
+    g.setLineDash([3, 3]);
+    g.beginPath();
+    g.moveTo(-6, 20); g.lineTo(-6, 12); g.lineTo(6, 12); g.lineTo(6, 20);
+    g.moveTo(0, 12); g.lineTo(0, -24);
+    g.stroke();
+    g.restore();
+  },
   ground(g) {
     g.beginPath();
     g.moveTo(0, 0); g.lineTo(0, 8);
@@ -250,6 +279,80 @@ function mos(g, isPmos) {
   }
   g.closePath();
   g.fill();
+}
+
+/** Drawn for a symbol type that has no art: a crossed box, so it reads as
+ *  "missing" rather than as some other component. See `drawComponent`. */
+function unknownSymbol(g) {
+  g.beginPath();
+  g.rect(-14, -14, 28, 28);
+  g.moveTo(-14, -14); g.lineTo(14, 14);
+  g.moveTo(14, -14); g.lineTo(-14, 14);
+  g.stroke();
+}
+
+/**
+ * JFET. Three terminals, and the gate touches the channel directly — there is
+ * no insulating gap, which is the whole difference from the MOSFET beside it.
+ * The arrow on the gate lead gives the junction's polarity: into the channel
+ * for an n-channel device, out of it for p-channel.
+ */
+function jfet(g, isP) {
+  g.beginPath();
+  g.moveTo(-20, 0); g.lineTo(-3, 0);                       // gate lead
+  g.moveTo(-3, -13); g.lineTo(-3, 13);                     // channel
+  g.moveTo(-3, -12); g.lineTo(20, -12); g.lineTo(20, -20); // drain
+  g.moveTo(-3, 12); g.lineTo(20, 12); g.lineTo(20, 20);    // source
+  g.stroke();
+  g.beginPath();
+  if (isP) {
+    g.moveTo(-8, -4); g.lineTo(-13, 0); g.lineTo(-8, 4);
+  } else {
+    g.moveTo(-13, -4); g.lineTo(-8, 0); g.lineTo(-13, 4);
+  }
+  g.closePath();
+  g.fill();
+}
+
+/**
+ * Power MOSFET. Drawn with its BODY DIODE, because that is the feature that
+ * distinguishes it in use: it is the reason a VDMOS conducts in reverse, and
+ * the reason it survives inductive switching. It is also three-terminal — the
+ * substrate is tied internally, so unlike the level 1/3 symbol there is no
+ * bulk pin to draw.
+ */
+function vdmos(g, isP) {
+  g.beginPath();
+  g.moveTo(-20, 0); g.lineTo(-8, 0);        // gate lead
+  g.moveTo(-8, -13); g.lineTo(-8, 13);      // gate plate
+  g.moveTo(-3, -13); g.lineTo(-3, 13);      // channel
+  g.moveTo(-3, -12); g.lineTo(12, -12); g.lineTo(12, -20); g.lineTo(20, -20);
+  g.moveTo(-3, 12); g.lineTo(12, 12); g.lineTo(12, 20); g.lineTo(20, 20);
+  g.moveTo(-3, 0); g.lineTo(12, 0);         // internal bulk tie
+  g.stroke();
+  // Channel-direction arrow, as on the level 1/3 symbol.
+  g.beginPath();
+  if (isP) {
+    g.moveTo(9, -4); g.lineTo(4, 0); g.lineTo(9, 4);
+  } else {
+    g.moveTo(4, -4); g.lineTo(9, 0); g.lineTo(4, 4);
+  }
+  g.closePath();
+  g.fill();
+  // Body diode, on the drain-source path. Its cathode faces the drain on an
+  // n-channel part and the source on a p-channel one, which is exactly the
+  // polarity that makes it conduct only in reverse.
+  const dy = isP ? -1 : 1;
+  g.beginPath();
+  g.moveTo(20, -20); g.lineTo(20, 20);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(16, 4 * dy); g.lineTo(24, 4 * dy); g.lineTo(20, -4 * dy);
+  g.closePath();
+  g.fill();
+  g.beginPath();
+  g.moveTo(16, -4 * dy); g.lineTo(24, -4 * dy);
+  g.stroke();
 }
 
 export class Renderer {
@@ -344,7 +447,12 @@ export class Renderer {
     g.fillStyle = isSelected ? COLORS.selected : COLORS.symbol;
     g.lineWidth = 1.6;
     g.lineJoin = 'round';
-    (ART[c.type] ?? ART.resistor)(g);
+    // A symbol type with no art must LOOK wrong. This used to fall back to
+    // `ART.resistor`, so adding a device to SYMBOLS and forgetting its drawing
+    // gave you a schematic showing a resistor where a transistor is — the
+    // picture disagreeing with the netlist, silently, which is the one thing
+    // the shared-transform rule above exists to prevent.
+    (ART[c.type] ?? unknownSymbol)(g);
     g.restore();
 
     // Pin markers, drawn unrotated so they stay circular.

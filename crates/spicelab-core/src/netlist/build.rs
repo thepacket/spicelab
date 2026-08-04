@@ -626,6 +626,49 @@ fn source_spec(
 
 // -------------------------------------------------------------- device build
 
+/// Refuse a `.model` card whose TYPE is not one this device implements.
+///
+/// Every model reader below used to select behaviour with a match whose final
+/// arm was `_`, so an unrecognised type silently became the default: a `VDMOS`
+/// power-FET card read as a LEVEL 1 Shichman-Hodges MOSFET, an `LPNP` read as
+/// an NPN. Nothing errored. The card's own parameters do not save you either,
+/// because unknown parameters are deliberately IGNORED as metadata (that rule
+/// is what makes vendor cards loadable at all), so a VDMOS's `rg`, `mtriode`
+/// and `ksubthres` vanish and its `vto`/`kp` are read into an entirely
+/// different set of equations.
+///
+/// This is the same hazard `mos_model` already refuses loudly for `LEVEL`, and
+/// the reasoning there applies verbatim: the parameters are not
+/// interchangeable, so loading the card would simulate a device that does not
+/// exist. It matters at scale — the KiCad Spice Library alone carries 4,372
+/// `VDMOS` cards, which are exactly the power FETs a user reaches for.
+///
+/// `Unsupported` rather than `Invalid`: these are real, ordinary SPICE models
+/// that ngspice implements and this core does not, so the netlist must stay
+/// eligible for the coverage engine. See `ErrorKind` in parse.rs.
+fn check_model_kind(
+    e: &FlatElement,
+    accepted: &[&str],
+) -> Result<(), ParseError> {
+    let Some(m) = e.model.as_ref() else { return Ok(()) };
+    if accepted.iter().any(|k| k.eq_ignore_ascii_case(&m.kind)) {
+        return Ok(());
+    }
+    err_kind(
+        e.line,
+        format!(
+            "{}: model '{}' is of type {}, which this core does not \
+             implement; it reads {}. The parameters are not interchangeable, \
+             so loading it would silently simulate a different device.",
+            e.name,
+            m.name,
+            m.kind.to_uppercase(),
+            accepted.join("/").to_uppercase(),
+        ),
+        ErrorKind::Unsupported,
+    )
+}
+
 /// Parameters the diode model reads. A card whose value for one of these fails
 /// to evaluate is refused; anything else is metadata and ignored.
 const DIODE_PARAMS: &[&str] = &[
@@ -634,6 +677,7 @@ const DIODE_PARAMS: &[&str] = &[
 ];
 
 fn diode_model(e: &FlatElement) -> Result<DiodeModel, ParseError> {
+    check_model_kind(e, &["d"])?;
     check_unresolved(e, DIODE_PARAMS)?;
     let d = DiodeModel::default();
     Ok(DiodeModel {
@@ -662,8 +706,11 @@ const BJT_PARAMS: &[&str] = &[
 ];
 
 fn bjt_model(e: &FlatElement) -> Result<BjtModel, ParseError> {
+    check_model_kind(e, &["npn", "pnp"])?;
     check_unresolved(e, BJT_PARAMS)?;
     let d = BjtModel::default();
+    // Safe to fall through to Npn only because `check_model_kind` has already
+    // established that the type is one of exactly these two.
     let kind = match e.model.as_ref().map(|m| m.kind.as_str()) {
         Some("pnp") => BjtType::Pnp,
         _ => BjtType::Npn,
@@ -714,8 +761,10 @@ const MOS_PARAMS: &[&str] = &[
 ];
 
 fn mos_model(e: &FlatElement) -> Result<MosModel, ParseError> {
+    check_model_kind(e, &["nmos", "pmos"])?;
     check_unresolved(e, MOS_PARAMS)?;
     let d = MosModel::default();
+    // See `bjt_model`: the `_` arm is only safe after `check_model_kind`.
     let kind = match e.model.as_ref().map(|m| m.kind.as_str()) {
         Some("pmos") => MosType::Pmos,
         _ => MosType::Nmos,
@@ -940,6 +989,12 @@ pub fn build(nl: &Netlist) -> Result<Circuit, ParseError> {
                 mos_model(e)?,
             )),
             's' => {
+                // A `VSWITCH` card is the PSpice spelling and is NOT this
+                // device: it states its thresholds as VON/VOFF where SW states
+                // VT/VH, so reading one here would take vt=vh=0 from the
+                // defaults and switch at 0 V instead of wherever the card says.
+                // There are 3,311 of them in the KiCad Spice Library alone.
+                check_model_kind(e, &["sw"])?;
                 let m = e.model.as_ref();
                 DeviceKind::VSwitch(VSwitch::new(
                     &e.name,

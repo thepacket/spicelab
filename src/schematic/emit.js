@@ -14,11 +14,14 @@
 import { SYMBOLS, isDirective, pinsOf, subcktPins } from './model.js';
 import { extractNets } from './nets.js';
 import { checkErc, hasBlockingErrors } from './erc.js';
-import { defaultPartFor, getPart, modelCard } from './parts.js';
+import { defaultPartFor, getPart, modelCard, modelName } from './parts.js';
 
 /** Netlist card letter and terminal count per symbol type. */
 /** Symbol types whose netlist card names a `.model`. */
-const NEEDS_MODEL = new Set(['diode', 'npn', 'pnp', 'nmos', 'pmos']);
+const NEEDS_MODEL = new Set([
+  'diode', 'npn', 'pnp', 'nmos', 'pmos',
+  'njf', 'pjf', 'nvdmos', 'pvdmos', 'sw',
+]);
 
 /**
  * Decide the model name and card for a semiconductor instance.
@@ -43,7 +46,10 @@ function resolveModel(c) {
   }
   const part = getPart(c.props.part) ?? defaultPartFor(c.type);
   if (!part) return { name: c.props.model ?? `${c.ref}_MOD`, card: null };
-  return { name: part.id, card: modelCard(part, part.id) };
+  // NOT `part.id` — a downloaded part's id carries its provenance and is not a
+  // legal SPICE token. See `modelName`.
+  const name = modelName(part);
+  return { name, card: modelCard(part, name) };
 }
 
 const CARD = {
@@ -58,6 +64,16 @@ const CARD = {
   pnp: 'Q',
   nmos: 'M',
   pmos: 'M',
+  njf: 'J',
+  pjf: 'J',
+  // A VDMOS is an `M` card like the other MOSFETs, but with three nodes rather
+  // than four — its body diode is intrinsic to the model, so there is no
+  // separate substrate terminal. The node count comes from `pinsOf`, so this
+  // needs no special case here; it is noted because the shared card letter is
+  // what made the missing model-type check dangerous.
+  nvdmos: 'M',
+  pvdmos: 'M',
+  sw: 'S',
 };
 
 /**

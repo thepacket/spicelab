@@ -28,4 +28,7 @@ pub mod parse;
 mod build;
 
 pub use build::{ac_spec, build, dc_spec, flatten, tran_options, FlatElement, ResolvedModel};
-pub use parse::{parse, parse_with, Analysis, Element, ModelCard, Netlist, ParseError, Resolver, Subckt};
+pub use parse::{
+    parse, parse_with, Analysis, Element, ErrorKind, ModelCard, Netlist, ParseError, Resolver,
+    Subckt,
+};
