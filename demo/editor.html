@@ -200,6 +200,7 @@
   <button data-place="ac">.ac</button>
   <button data-place="dc">.dc</button>
   <button data-place="tf">.tf</button>
+  <button data-place="four">.four</button>
   <button data-place="op">.op</button>
 
   <h2>Edit</h2>
@@ -241,6 +242,8 @@
   <div class="row">
     <input id="tstop" value="5m" title="tstop"><input id="tstep" value="10u" title="tstep">
   </div>
+
+  <pre id="four-out" style="display:none"></pre>
 
   <h2>Meter</h2>
   <div id="meter"><small class="muted">route a probe to the meter</small></div>
@@ -312,6 +315,7 @@
 import { Schematic, SYMBOLS } from '../src/schematic/model.js';
 import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
 import { probeColor } from '../src/instruments/probe.js';
+import { fourier } from '../src/instruments/fourier.js';
 import { MODEL_SOURCES, CIRCUIT_SOURCES, LICENCE_NOTE } from '../src/schematic/libraries.js';
 import { Editor } from '../src/schematic/editor.js';
 import { toNetlist } from '../src/schematic/emit.js';
@@ -1155,6 +1159,48 @@ document.getElementById('run-op').onclick = async () => {
   } catch (e) { status('error: ' + e.message); }
 };
 
+/**
+ * `.four` cards for the current netlist.
+ *
+ * Read back out of the EMITTED TEXT rather than from placed blocks, so a
+ * `.four` typed by hand into a SPICE text block behaves identically to one
+ * dropped on the canvas. Anything else would make the card silently do nothing
+ * in the one case where the user wrote it out explicitly.
+ */
+function fourRequests(netlist) {
+  const out = [];
+  for (const m of netlist.matchAll(/^\s*\.four(?:ier)?\s+(\S+)\s+(.+)$/gim)) {
+    const node = m[2].trim().replace(/^v\s*\(\s*/i, '').replace(/\s*\)\s*$/, '');
+    const freq = suffix(m[1]);
+    if (freq > 0 && node) out.push({ freq, node });
+  }
+  return out;
+}
+
+/**
+ * Render Fourier results as tables.
+ *
+ * APPENDS. A netlist may carry several `.four` cards — one per output is the
+ * normal way to use it — and the first version replaced the panel's contents
+ * each time, so only the last card was ever visible and the others silently
+ * vanished after being computed.
+ */
+function showFourier(node, freq, r, append = false) {
+  const el = document.getElementById('four-out');
+  el.style.display = '';
+  const prev = append && el.textContent ? el.textContent + '\n\n' : '';
+  const rows = r.harmonics.slice(1).map((h) =>
+    `${String(h.n).padStart(2)}  ${eng(h.freq, 'Hz').padEnd(10)} ` +
+    `${eng(h.mag, 'V').padEnd(11)} ${(h.norm * 100).toFixed(3).padStart(8)}%  ` +
+    `${h.phase.toFixed(1).padStart(7)}°`).join('\n');
+  el.textContent = prev +
+    `.four ${eng(freq, 'Hz')} V(${node})   DC = ${eng(r.dc, 'V')}\n` +
+    `window ${eng(r.window.t1 - r.window.t0, 's')} (${r.window.periods} period` +
+    `${r.window.periods > 1 ? 's' : ''}), ending at ${eng(r.window.t1, 's')}\n` +
+    ` n  freq       amplitude   relative    phase\n${rows}\n` +
+    `THD = ${r.thd.toFixed(3)} %`;
+}
+
 document.getElementById('run-tran').onclick = async () => {
   if (!guard()) return;
   try {
@@ -1167,12 +1213,42 @@ document.getElementById('run-tran').onclick = async () => {
     showEngine(c);
     warnUnresolved(scope.begin(probes, info.labels));
     status('running…');
+
+    // `.four` needs the raw samples of ONE column. Capturing it here, from the
+    // streamed rows, means the node does not have to be probed — the scope
+    // only holds what the user chose to look at, and requiring a probe would
+    // make the analysis depend on an unrelated UI decision.
+    const four = fourRequests(current.netlist).map((f) => {
+      const col = info.labels.findIndex((l) => l.toLowerCase() === f.node.toLowerCase());
+      return { ...f, col, t: [], v: [] };
+    });
+    document.getElementById('four-out').style.display = 'none';
+
     const t0 = performance.now();
     const stats = await c.tran(
       { tstop, tstep, tmax: tstep / 2, method: 'trap' },
-      (view, n, stride) => { scope.push(view, n, stride); drawScope(); },
+      (view, n, stride) => {
+        scope.push(view, n, stride);
+        for (const f of four) {
+          if (f.col < 0) continue;
+          for (let r = 0; r < n; r++) {
+            f.t.push(view[r * stride]);
+            f.v.push(view[r * stride + 1 + f.col]);
+          }
+        }
+        drawScope();
+      },
     );
     drawScope();
+
+    for (const f of four) {
+      if (f.col < 0) {
+        status(`.four: no net named "${f.node}" in this design`);
+        continue;
+      }
+      try { showFourier(f.node, f.freq, fourier(f.t, f.v, f.freq), f !== four[0]); }
+      catch (e) { status('.four: ' + e.message); }
+    }
     status(`transient (${from}): ${scope.times.length} points, ` +
            `${stats.accepted} accepted, ${stats.rejected} rejected, ` +
            `${(performance.now() - t0).toFixed(0)} ms`);

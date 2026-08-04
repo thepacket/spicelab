@@ -225,6 +225,24 @@ export const SYMBOLS = {
     ],
     card: (p) => `.tf V(${p.output}) ${p.input}`,
   },
+  /**
+   * `.four <freq> V(<node>)` — Fourier analysis of a transient.
+   *
+   * Unlike every other block here, this one names an analysis the SOLVER does
+   * not run: it is post-processing on transient samples, done above both
+   * engines (`src/instruments/fourier.js`). The card is still emitted, and the
+   * host reads it back out of the netlist — so a `.four` typed by hand into a
+   * SPICE text block works exactly like a placed one, rather than being
+   * silently ignored.
+   */
+  four: {
+    prefix: 'FOUR', pins: [], directive: true, label: 'Fourier',
+    params: [
+      { key: 'freq', def: '1k' },
+      { key: 'output', def: 'out' },
+    ],
+    card: (p) => `.four ${p.freq} V(${p.output})`,
+  },
 
   /**
    * An instance of a `.subckt` macromodel.

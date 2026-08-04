@@ -665,10 +665,17 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 return Ok(());
             }
             "ends" | "eom" | "end" | "title" | "probe" | "print" | "plot" | "width"
-            | "temp" | "nodeset" | "ic" | "save" => {
+            | "temp" | "nodeset" | "ic" | "save" | "four" | "fourier" => {
                 // Accepted and ignored: output/formatting directives that do not
                 // affect the solved circuit. Ignoring beats rejecting, because a
                 // vendor model file is full of them.
+                //
+                // `.four` is here because it is not a solver analysis at all —
+                // it is post-processing on a transient's samples, done above
+                // both engines in `src/instruments/fourier.js` so that a design
+                // routed to ngspice for its DEVICES does not lose it. The host
+                // reads the card back out of the netlist text and runs it after
+                // the transient; the solver has nothing to do for it.
                 return Ok(());
             }
             other => {
