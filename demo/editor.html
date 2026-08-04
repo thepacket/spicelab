@@ -131,6 +131,28 @@
   #right details.sec[open] > summary::before { content: '▾'; }
   #right details.sec > summary:hover { color: var(--fg); }
   #right details.sec > .body { padding-bottom: .5rem; }
+  /* Part chooser */
+  #part-picker { width: min(680px, 92vw); height: min(560px, 86vh); padding: 0;
+                 border: 1px solid var(--line); border-radius: 6px;
+                 background: var(--panel); color: var(--fg); }
+  #part-picker::backdrop { background: rgba(0,0,0,.5); }
+  #part-picker { display: none; }
+  #part-picker[open] { display: flex; flex-direction: column; }
+  .pp-head { display: flex; gap: .5rem; align-items: center;
+             padding: .6rem; border-bottom: 1px solid var(--line); }
+  .pp-head input { flex: 1; }
+  .pp-head button { width: auto; }
+  #pp-scroll { flex: 1; overflow-y: auto; position: relative; }
+  #pp-sizer { position: relative; }
+  #pp-rows { position: absolute; left: 0; right: 0; top: 0; }
+  .pp-row { height: 34px; padding: .25rem .6rem; cursor: pointer;
+            border-bottom: 1px solid var(--line); overflow: hidden; }
+  .pp-row:hover { background: var(--hover); }
+  .pp-row.cur { background: var(--accent); color: var(--on-fg); }
+  .pp-row .nm { font-size: 12px; }
+  .pp-row .src { font-size: 10px; color: var(--muted); }
+  .pp-row.cur .src { color: var(--on-fg); opacity: .75; }
+  .pp-foot { padding: .45rem .6rem; border-top: 1px solid var(--line); }
   #lib-dl, #sym-dl { margin-top: .4rem; }
   #sym-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   #sym-dl .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
@@ -248,6 +270,26 @@
   <h2>View</h2>
   <button id="theme">Theme <small>dark</small></button>
 </aside>
+
+<!-- Part chooser.
+     A MODAL, not another right-panel section: choosing a part is a focused
+     task with one answer, and the panel was already 1,850px of content. It is
+     opened FROM the component and pre-filtered to that component's type, so
+     the list is "every candidate for this symbol" rather than "everything". -->
+<dialog id="part-picker">
+  <div class="pp-head">
+    <b id="pp-title">Choose a part</b>
+    <input id="pp-q" placeholder="filter…" autocomplete="off">
+    <span id="pp-count" class="what"></span>
+    <button id="pp-close" class="ghost">Close</button>
+  </div>
+  <!-- Virtualised: only the visible rows exist in the DOM. A diode kind can
+       have 51,533 candidates, and building that many nodes freezes the page —
+       which is why the old UI capped the list at 60 and told the user to type
+       a name they had no way of knowing. -->
+  <div id="pp-scroll"><div id="pp-sizer"><div id="pp-rows"></div></div></div>
+  <div class="pp-foot what" id="pp-note"></div>
+</dialog>
 
 <div id="main">
   <div id="sheet-wrap"><canvas id="sheet"></canvas></div>
@@ -726,21 +768,7 @@ function refresh() {
       c.props = { ...c.props, params: e.target.value.trim() };
       editor._changed();
     });
-    document.getElementById('p-browse')?.addEventListener('click', () => {
-      const sec = revealSection('model libraries');
-      if (!sec) return;
-      const q = document.getElementById('lib-q');
-      // If nothing is installed yet, the search box is hidden and the download
-      // button is what the user needs to see — say so rather than focusing a
-      // field that is not there.
-      if (!q || q.offsetParent === null) {
-        status('download the model library first — the button is in Model libraries');
-        return;
-      }
-      q.focus();
-      status(`searching the library for a ${c.type} — pick one and press ` +
-             `"Use for selected"`);
-    });
+    document.getElementById('p-browse')?.addEventListener('click', () => openPartPicker(c));
     document.getElementById('p-model')?.addEventListener('change', (e) => {
       editor.commit();
       const name = e.target.value.trim();
@@ -886,6 +914,123 @@ function foldRightPanel() {
     kids.splice(i, 1 + body.length, det);
     i++;
   }
+}
+
+/**
+ * The part chooser.
+ *
+ * Opened FROM a component and pre-filtered to that component's kind, so the
+ * list answers "which parts can this symbol be?" — the question actually being
+ * asked. Every candidate is listed; the filter box narrows, it is not the only
+ * way in. Requiring a name the user cannot know was the previous design's
+ * mistake, and it existed only because rendering 51,533 rows freezes the page.
+ *
+ * So the list is VIRTUALISED: a sizer div gives the scrollbar the full height,
+ * and only the ~20 rows in view are in the DOM. Cost is constant in the number
+ * of parts.
+ */
+/**
+ * Put a library part on the selected symbol.
+ *
+ * MODULE scope, not inside the library panel's block, because two different
+ * UIs call it — the panel's search results and the part chooser. It lived in
+ * that block and the chooser's call threw a ReferenceError INSIDE AN EVENT
+ * HANDLER, so the dialog closed and nothing happened: no assignment, no error
+ * on screen. Same shape as the `el` helper that silently killed the .step
+ * button. One assignment path also means the kind check and the undo commit
+ * cannot differ between the two callers.
+ *
+ * The kinds must MATCH: a PNP card on an NPN symbol simulates happily and
+ * answers wrongly, which is the failure this project treats as the dangerous
+ * one.
+ */
+function assignPart(part, from = '') {
+  if (!part) { status('that part is no longer registered'); return; }
+  const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
+  if (sel.length !== 1) { status('select exactly one symbol first'); return; }
+  const c = sel[0];
+  if (part.kind !== c.type) {
+    status(`that part is a ${part.kind}, but ${c.ref} is a ${c.type} — not assigning`);
+    return;
+  }
+  editor.commit();
+  c.props.part = part.id;
+  editor._changed();
+  refresh();
+  status(`${c.ref} now uses ${part.label}${from ? ` from ${from}` : ''}`);
+}
+
+const PP = { parts: [], shown: [], target: null, rowH: 34 };
+
+function openPartPicker(c) {
+  const dlg = document.getElementById('part-picker');
+  PP.target = c;
+  PP.parts = partsFor(c.type);
+  document.getElementById('pp-title').textContent =
+    `${c.ref}: choose a ${SYMBOLS[c.type].label ?? c.type}`;
+  const q = document.getElementById('pp-q');
+  q.value = '';
+  ppFilter('');
+  dlg.showModal();
+  q.focus();
+}
+
+function ppFilter(query) {
+  const t = String(query).trim().toLowerCase();
+  PP.shown = t
+    ? PP.parts.filter((p) => p.label.toLowerCase().includes(t)
+                          || p.id.toLowerCase().includes(t))
+    : PP.parts;
+  const total = PP.parts.length;
+  document.getElementById('pp-count').textContent =
+    t ? `${PP.shown.length.toLocaleString()} of ${total.toLocaleString()}`
+      : `${total.toLocaleString()} parts`;
+  const builtins = PP.shown.filter((p) => !p.id.startsWith('lib:')).length;
+  document.getElementById('pp-note').textContent = total
+    ? `${builtins} built-in (validated against this solver), ` +
+      `${(PP.shown.length - builtins).toLocaleString()} from the downloaded library.`
+    : 'No parts of this kind. Download the model library under Model libraries.';
+  document.getElementById('pp-sizer').style.height = `${PP.shown.length * PP.rowH}px`;
+  document.getElementById('pp-scroll').scrollTop = 0;
+  ppRender();
+}
+
+function ppRender() {
+  const sc = document.getElementById('pp-scroll');
+  const rows = document.getElementById('pp-rows');
+  const first = Math.max(0, Math.floor(sc.scrollTop / PP.rowH) - 4);
+  const count = Math.ceil(sc.clientHeight / PP.rowH) + 8;
+  const slice = PP.shown.slice(first, first + count);
+  rows.style.transform = `translateY(${first * PP.rowH}px)`;
+  const cur = PP.target?.props?.part ?? defaultPartFor(PP.target?.type)?.id;
+  rows.innerHTML = slice.map((p, i) => {
+    const [name, where] = p.label.split(' — ');
+    return `<div class="pp-row${p.id === cur ? ' cur' : ''}" data-i="${first + i}">
+      <div class="nm">${esc(name)}</div>
+      <div class="src">${esc(where ?? (p.id.startsWith('lib:') ? '' : 'built-in'))}</div>
+    </div>`;
+  }).join('');
+  for (const el of rows.querySelectorAll('.pp-row')) {
+    el.onclick = () => {
+      const p = PP.shown[Number(el.dataset.i)];
+      document.getElementById('part-picker').close();
+      // Reuse the one assignment path, so the kind check and the undo commit
+      // cannot differ between here and the library search.
+      assignPart(p);
+    };
+  }
+}
+
+{
+  const dlg = document.getElementById('part-picker');
+  document.getElementById('pp-scroll').addEventListener('scroll', ppRender);
+  document.getElementById('pp-close').onclick = () => dlg.close();
+  let ppTimer = 0;
+  document.getElementById('pp-q').oninput = (e) => {
+    clearTimeout(ppTimer);
+    const v = e.target.value;
+    ppTimer = setTimeout(() => ppFilter(v), 80);
+  };
 }
 
 /** Redraw every instrument that sizes itself from the DOM. */
@@ -1307,21 +1452,6 @@ document.getElementById('model-file').onchange = async (ev) => {
    * simulates perfectly happily and answers wrongly, which is the failure this
    * project treats as the dangerous one.
    */
-  function assignPart(part, from = '') {
-    if (!part) { status('that part is no longer registered'); return; }
-    const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
-    if (sel.length !== 1) { status('select exactly one symbol first'); return; }
-    const c = sel[0];
-    if (part.kind !== c.type) {
-      status(`that part is a ${part.kind}, but ${c.ref} is a ${c.type} — not assigning`);
-      return;
-    }
-    editor.commit();
-    c.props.part = part.id;
-    editor._changed();
-    refresh();
-    status(`${c.ref} now uses ${part.label}${from ? ` from ${from}` : ''}`);
-  }
 
   /**
    * Put one model on the canvas.
