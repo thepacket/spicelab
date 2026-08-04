@@ -86,15 +86,15 @@ should not have to know a part number to find a part.
 Numerical bugs in a circuit simulator are silent. A sign error in one Jacobian
 entry, or a charge stored from the wrong iterate, produces waveforms that look
 entirely reasonable and are wrong. **Plausibility is not a test.** So there are
-four independent layers, and `npm test` runs all of them — 690 checks plus 81
-Rust tests:
+four independent layers, and `npm test` runs all of them — around 690 JS
+checks plus 80-odd Rust tests:
 
 | Layer | What it proves |
 |---|---|
 | Analytic suite | Closed-form answers — RC steps, LC energy conservation, transformer turns ratios, known bias points |
 | Golden fixtures | The Rust core reproduces the JS reference oracle exactly |
 | **ngspice differential** | An independent implementation agrees. This is the layer that found the real bugs |
-| **Parser conformance** | Third-party regression suites — ngspice's 623 netlists and Xyce's 3,726 — parse without being reported as malformed. 1,621 of the Xyce set now build cleanly |
+| **Parser conformance** | Third-party regression suites — ngspice's 623 netlists and Xyce's 3,726 — parse without being reported as malformed, and over 1,600 of the Xyce set build cleanly |
 
 The third layer earns its keep. The oracle only proves the Rust core reproduces
 *itself* — both were written from the same reading of the same equations, so a
