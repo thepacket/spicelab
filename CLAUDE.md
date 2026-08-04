@@ -1086,16 +1086,42 @@ Both were added because they are unusually SENSITIVE, not to claim a feature:
   test like an RC step. Its frequency is set by the stage delay, so it also
   checks the charge paths.
 
-**The 74xx logic libraries need XSPICE, and that is a different question from
-writing one.** The Intusoft 74HC/74LS/7400 libraries are almost entirely `A`
+**XSPICE is now ENABLED in the wasm build, and the story about it was wrong.**
+It was off on the stated grounds that it dlopens native objects at runtime.
+That is true of its CODE MODELS and false of the rest of it, and the actual
+obstacle was neither: `cmpp`, XSPICE's code-model preprocessor, is a BUILD-TIME
+tool that must run on the host, and `emmake` cross-compiled it to wasm so the
+build tried to execute a wasm module as a program. `scripts/build-ngspice.sh`
+now builds `cmpp` natively first and then builds only `libngspice.la`, skipping
+the Verilog interface and the `.cm` bundles, neither of which anything links.
+
+**The cost of having it off was larger than "no 74xx".** `POLY()` on E/F/G/H
+sources is gated behind XSPICE, and without it ngspice refuses the card
+outright. POLY is how every PARTS-generated vendor macromodel builds its supply
+and limiting stages — **361 of the 2,073 files in the KiCad Spice Library use
+it**, TI's own TL072 among them. So 17% of real vendor models were unusable on
+the engine they route to, for a reason recorded as being about digital logic.
+
+**It is still not enough, and the remaining gap is precise.** ngspice implements
+POLY by REWRITING the source into an XSPICE code-model instance
+(`a$poly$e.x1.egnd`), so it needs the `.cm` code models, which are `dlopen`ed —
+under Emscripten that means building them as side modules. Native ngspice runs
+the TL072 file and reports 106.9 dB against the datasheet's 106 dB typical, so
+the model and the reference values are right and the gap is entirely ours.
+`tests/vendor-model.test.mjs` asserts the routing today and skips the
+measurements with that explanation, so it starts passing when code models land.
+
+**The 74xx logic libraries need XSPICE code models, and that is a different
+question from writing a kernel.** The Intusoft 74HC/74LS/7400 libraries are almost entirely `A`
 devices — `anand [in1 in2] out ls_nand` with `.model ls_nand d_nand(...)` —
 which are XSPICE code models: 1,859 of 2,030 elements across four libraries.
 The parser already classifies them correctly as `unsupported element type 'A'`,
-and native ngspice 46 runs them fine. The only thing stopping SpiceLab is that
-**this wasm build disables XSPICE**, because its code models are `dlopen`ed
-shared objects. So enabling logic-level digital is not "write a second kernel",
-it is "solve the dlopen problem under Emscripten" — a real but bounded piece of
-work, and the honest reason it is not done rather than a design objection.
+and native ngspice 46 runs them fine. The only thing stopping SpiceLab is the CODE MODELS: XSPICE itself is now
+compiled in, but its `.cm` bundles are `dlopen`ed shared objects. So enabling
+logic-level digital is not "write a second kernel", it is "build the code
+models as Emscripten side modules" — a real but bounded piece of work, and the
+honest reason it is not done rather than a design objection. The same piece of
+work unblocks `POLY()`, which is worth far more.
 
 **Writing our own event-driven kernel is deliberately absent, and should stay
 that way.** Logic-level digital is not MNA — it is event scheduling over discrete
