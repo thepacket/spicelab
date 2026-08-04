@@ -1,0 +1,72 @@
+# SpiceLab static serving.
+#
+# The two Cross-Origin-* headers are the entire reason this app cannot live on
+# a host that only serves files (raw GitHub Pages, for instance). Without them
+# `crossOriginIsolated` is false, SharedArrayBuffer is unavailable, and the
+# simulator cannot stream results back to the page at all.
+{
+	admin off
+	# Fly terminates TLS at its edge and forwards plain HTTP to the machine.
+	auto_https off
+	servers {
+		# Trust Fly's proxy so client IPs and X-Forwarded-Proto are honest.
+		trusted_proxies static private_ranges
+	}
+}
+
+:8080 {
+	root * /srv
+
+	header {
+		# ---- the whole point of this file ----
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		# Lets our own subresources load under require-corp. Anything fetched
+		# CROSS-origin must send its own CORP/CORS — raw.githubusercontent.com
+		# does (verified), which is what makes the model-library download work
+		# from an isolated page.
+		Cross-Origin-Resource-Policy "same-origin"
+
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Compression matters here more than usual: the ngspice engine is ~4.9 MB
+	# raw and ~1.6 MB gzipped. application/wasm is NOT in Caddy's default
+	# encode list, so it is named explicitly — leaving it out silently ships
+	# the uncompressed megabytes.
+	encode {
+		zstd
+		gzip
+		match {
+			header Content-Type text/*
+			header Content-Type application/javascript*
+			header Content-Type application/json*
+			header Content-Type application/wasm*
+			header Content-Type image/svg+xml*
+		}
+	}
+
+	# Go's MIME table does not always know .wasm, and a wasm file served as
+	# application/octet-stream makes WebAssembly.instantiateStreaming fail.
+	@wasm path *.wasm
+	header @wasm Content-Type "application/wasm"
+
+	# Build artifacts change only on redeploy, and the image is rebuilt for
+	# every deploy, so they are safe to pin hard.
+	@artifacts path /src/wasm/* /src/ngspice/*
+	header @artifacts Cache-Control "public, max-age=31536000, immutable"
+
+	# Everything else is hand-written source served directly. It has no content
+	# hash in its URL, so it must revalidate or a deploy would not be visible.
+	@source path *.html *.js *.mjs *.css
+	header @source Cache-Control "no-cache"
+
+	# The application is demo/editor.html. A redirect rather than a rewrite:
+	# editor.html imports its modules as `../src/...`, which only resolves
+	# correctly when the document really is at /demo/.
+	redir / /demo/editor.html 302
+
+	file_server
+}

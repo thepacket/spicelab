@@ -39,8 +39,20 @@ async function route(netlist) {
   let r = select(await engineList(), netlist);
   if (!r.engine && r.verdict.kind === 'unsupported' && !ngspice) {
     emit('engine-loading', { id: 'ngspice' });
-    const { NgspiceEngine } = await import('./ngspice-engine.js');
-    ngspice = await NgspiceEngine.create(emit);
+    try {
+      const { NgspiceEngine } = await import('./ngspice-engine.js');
+      ngspice = await NgspiceEngine.create(emit);
+    } catch (e) {
+      // The coverage engine is a ~4.9 MB build artifact that a deployment may
+      // deliberately omit (see docs/deploy-fly.md). Say that, rather than
+      // surfacing a module-resolution error about a file the user has never
+      // heard of — the netlist is fine and the diagnosis is a missing build.
+      throw new Error(
+        `${r.verdict.message ?? 'this design needs the coverage engine'}, and ` +
+        `ngspice is not available in this build (${e.message}). ` +
+        `Rebuild with the ngspice engine included, or simplify the design to ` +
+        `what the interactive core supports.`);
+    }
     r = select(await engineList(), netlist);
   }
   if (!r.engine) throw new Error(r.reason);

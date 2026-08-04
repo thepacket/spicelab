@@ -1,0 +1,46 @@
+# Fly.io deployment for SpiceLab.
+#
+#   fly launch --no-deploy     (once, to create the app; or `fly apps create`)
+#   fly deploy
+#
+# See docs/deploy-fly.md. The one thing that must not be "simplified" away is
+# the COOP/COEP pair in Caddyfile — without cross-origin isolation the
+# simulator cannot use SharedArrayBuffer and every run comes back empty.
+
+app = "spicelab"
+primary_region = "yyz"
+
+[build]
+  dockerfile = "Dockerfile"
+  # Set to "ngspice-skip" for a much faster build without the coverage engine.
+  [build.args]
+    NGSPICE = "ngspice-build"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Static serving with no server-side state, so machines can sleep between
+  # visits and cold-start on demand. Nothing is lost: the downloaded model
+  # library lives in the USER's IndexedDB, not on the server.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 400
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# Fly's default health check is a TCP connect, which is enough for a static
+# server. An HTTP check is used instead so a broken Caddyfile fails the deploy
+# rather than serving 500s.
+[[http_service.checks]]
+  grace_period = "5s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/demo/editor.html"

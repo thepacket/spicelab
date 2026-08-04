@@ -1,0 +1,17 @@
+# The build context must not carry the Rust target dir (gigabytes) or the
+# ngspice/Xyce working trees — the image builds what it needs from source.
+target/
+node_modules/
+.git/
+.ngspice-build/
+.xyce-regression/
+
+# Build artifacts produced inside the image. Copying host-built ones in would
+# be worse than useless: the wasm-bindgen JS must match the wasm-bindgen crate
+# version in Cargo.lock, and a stale pair fails at instantiate time.
+src/wasm/
+src/wasm-node/
+src/ngspice/
+
+.DS_Store
+*.log
