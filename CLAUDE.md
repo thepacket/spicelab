@@ -759,6 +759,21 @@ The budget for `invalid` is **zero**, and getting there fixed four defects:
 That last point generalises: **a refusal classified as `invalid` when it should
 be `unsupported` is not a cosmetic error.** It changes what the app does.
 
+**A third corpus: real vendor models.** The KiCad Spice Library's 1,227 model
+files (aggregated manufacturer material — download and use, do NOT redistribute)
+found two more, and one of them was ours:
+
+- **`checkNetlist` hand-rolled JSON and escaped three characters.** Any error
+  message carrying a control byte — a carriage return from a CRLF file, a tab —
+  produced INVALID JSON, so the host's `JSON.parse` threw instead of reporting
+  the netlist. 63 vendor files hit it. Escape properly, or do not hand-roll.
+- **PSpice behavioural sources were called malformed.** `E1 out 0 VALUE {expr}`
+  and `ERES 1 3 value={...}` take two nodes and an expression where a plain
+  controlled source takes four nodes and a gain. Both spellings occur and
+  `pair_up` glues `value={...}` into one token, so the keyword must be matched
+  with AND without the `=`. 70+ files. They are `unsupported` now, and a
+  genuinely short `E1 out 0` is still `invalid`.
+
 Two further defects came out of the Xyce corpus:
 
 - **`PARAMS:` was not understood.** It is the PSpice-family keyword introducing
@@ -923,8 +938,19 @@ Both were added because they are unusually SENSITIVE, not to claim a feature:
   test like an RC step. Its frequency is set by the stage delay, so it also
   checks the charge paths.
 
-**Event-driven logic simulation is deliberately absent, and should stay that
-way.** Logic-level digital is not MNA — it is event scheduling over discrete
+**The 74xx logic libraries need XSPICE, and that is a different question from
+writing one.** The Intusoft 74HC/74LS/7400 libraries are almost entirely `A`
+devices — `anand [in1 in2] out ls_nand` with `.model ls_nand d_nand(...)` —
+which are XSPICE code models: 1,859 of 2,030 elements across four libraries.
+The parser already classifies them correctly as `unsupported element type 'A'`,
+and native ngspice 46 runs them fine. The only thing stopping SpiceLab is that
+**this wasm build disables XSPICE**, because its code models are `dlopen`ed
+shared objects. So enabling logic-level digital is not "write a second kernel",
+it is "solve the dlopen problem under Emscripten" — a real but bounded piece of
+work, and the honest reason it is not done rather than a design objection.
+
+**Writing our own event-driven kernel is deliberately absent, and should stay
+that way.** Logic-level digital is not MNA — it is event scheduling over discrete
 states, i.e. a second simulation kernel with its own queue, its own convergence
 story and its own timing model. ngspice reaches it through XSPICE, which this
 build excludes for a technical reason (code models are `dlopen`ed, see

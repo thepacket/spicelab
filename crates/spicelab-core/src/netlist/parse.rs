@@ -680,6 +680,34 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
         _ => 2,
     };
     if pos.len() < n_nodes {
+        // A short E or G is usually not a broken card: it is a PSpice-family
+        // BEHAVIOURAL source, which takes two nodes and an expression where a
+        // plain controlled source takes four nodes and a gain.
+        //
+        //     ERES 1 3 value={I(VSENSE)*...}
+        //     E1 5 4 VALUE={IF((V(1)>V(2)), V(4)+5V, V(4))}
+        //     G1 out 0 TABLE {V(a)} = (0,0) (1,1)
+        //
+        // Both spellings occur and `pair_up` glues `value={...}` into a single
+        // token, so the keyword is matched with and without the `=`. Vendor
+        // macromodels use these constantly — 70+ files in one library — and
+        // calling them malformed both blamed the vendor's file and stopped it
+        // routing to an engine that implements them.
+        if matches!(letter, 'e' | 'g') {
+            let behavioural = toks.iter().any(|t| {
+                let t = t.to_lowercase();
+                ["value", "table", "laplace", "freq", "poly"]
+                    .iter()
+                    .any(|k| t == *k || t.starts_with(&format!("{k}=")))
+            });
+            if behavioural {
+                return err_kind(
+                    lineno,
+                    format!("{}: behavioural sources are not implemented", toks[0]),
+                    ErrorKind::Unsupported,
+                );
+            }
+        }
         return err(
             lineno,
             format!(

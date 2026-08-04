@@ -896,6 +896,34 @@ pub fn build(nl: &Netlist) -> Result<Circuit, ParseError> {
                 }
                 DeviceKind::CurrentSource(i)
             }
+            // PSpice-family BEHAVIOURAL sources: `E1 out 0 VALUE {expr}`, plus
+            // TABLE, LAPLACE, FREQ and POLY. They take two nodes and an
+            // expression where a plain VCVS takes four nodes and a gain, and
+            // vendor macromodels use them constantly — 70+ files in one library.
+            //
+            // The keyword is checked across NODES as well as arguments because
+            // a four-node device swallows `VALUE` as its third node long before
+            // the argument list is read; looking only at args never matched.
+            //
+            // Unsupported, not invalid: this is ordinary SPICE, and misfiling
+            // it both blamed the vendor's file and stopped it routing to an
+            // engine that implements it.
+            'e' | 'g' if e.nodes.iter().chain(e.args.iter()).any(|a| {
+                let t = a.to_lowercase();
+                // Both spellings occur, and `pair_up` glues the second into one
+                // token: `VALUE {expr}` stays two, `value={expr}` becomes one.
+                // Matching only the bare word missed 50+ real vendor files.
+                ["value", "table", "laplace", "freq", "poly"]
+                    .iter()
+                    .any(|k| t == *k || t.starts_with(&format!("{k}=")))
+            }) =>
+            {
+                return err_kind(
+                    e.line,
+                    format!("{}: behavioural sources are not implemented", e.name),
+                    ErrorKind::Unsupported,
+                )
+            }
             'e' => DeviceKind::Vcvs(Vcvs::new(&e.name, n[0], n[1], n[2], n[3], e.arg(0)?)),
             'g' => DeviceKind::Vccs(Vccs::new(&e.name, n[0], n[1], n[2], n[3], e.arg(0)?)),
             'd' => DeviceKind::Diode(Diode::new(&e.name, n[0], n[1], diode_model(e)?)),

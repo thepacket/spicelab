@@ -71,11 +71,23 @@ impl Session {
     pub fn check_netlist(src: &str) -> String {
         fn report(e: &spicelab_core::netlist::parse::ParseError) -> String {
             // Hand-built so the crate needs no serde dependency at the boundary.
-            let msg = e
-                .message
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ");
+            // Escape properly. Hand-rolling JSON with three replacements
+            // produced INVALID JSON the moment a message carried a control
+            // byte — a carriage return from a CRLF file, a tab, a stray 0x0C
+            // — and the host's JSON.parse then threw instead of reporting the
+            // netlist. 63 files in one vendor library hit this.
+            let mut msg = String::with_capacity(e.message.len() + 16);
+            for ch in e.message.chars() {
+                match ch {
+                    '"' => msg.push_str("\\\""),
+                    '\\' => msg.push_str("\\\\"),
+                    '\n' | '\r' | '\t' => msg.push(' '),
+                    c if (c as u32) < 0x20 => {
+                        msg.push_str(&format!("\\u{:04x}", c as u32))
+                    }
+                    c => msg.push(c),
+                }
+            }
             format!(
                 r#"{{"ok":false,"kind":"{}","line":{},"message":"{}"}}"#,
                 e.kind.as_str(),
