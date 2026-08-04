@@ -191,6 +191,38 @@ export function checkErc(sch, extracted) {
     }
   }
 
+  // --- a named model must actually be defined somewhere ---------------------
+  // `props.model` points at a `.model` card in a pasted SPICE text block —
+  // there is no filesystem, so `.include` cannot fetch one. A typo there
+  // builds a netlist the parser rejects with "undefined model", which names
+  // the GENERATED text rather than the component on screen. That is the exact
+  // gap every other check in this file exists to close.
+  //
+  // A WARNING, not an error. The check can only see text blocks on this
+  // canvas, and being wrong in the blocking direction would stop a design that
+  // simulates fine.
+  const defined = new Set();
+  for (const c of sch.components) {
+    if (c.type !== 'spice' || c.enabled === false) continue;
+    for (const m of String(c.props.text ?? '')
+      .matchAll(/^\s*\.(?:model|subckt)\s+(\S+)/gim)) {
+      defined.add(m[1].toLowerCase());
+    }
+  }
+  for (const c of sch.components) {
+    if (!MODEL_BASED.has(c.type) || c.enabled === false) continue;
+    const name = String(c.props.model ?? '').trim();
+    if (!name || c.props.part) continue;
+    if (!defined.has(name.toLowerCase())) {
+      warn(
+        'undefined-model',
+        `${c.ref} names model "${name}", which no SPICE text block on this ` +
+        `sheet defines.`,
+        { component: c },
+      );
+    }
+  }
+
   // --- duplicate references ------------------------------------------------
   const seen = new Map();
   for (const c of sch.components) {

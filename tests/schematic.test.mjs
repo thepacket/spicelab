@@ -755,8 +755,53 @@ console.log('\nSubcircuit instances');
   check('and multi-line text keeps its lines', t4.split('\n').filter((l) => /R1 a c/.test(l)).length === 1, t4);
 }
 
-console.log(`${pass} passed, ${fail} failed`);
-if (failures.length) {
+
+// ---------------------------------------------- naming a model defined elsewhere
+
+console.log('\nA model defined in a SPICE text block');
+{
+  const mk = (props, text) => {
+    const s = new Schematic();
+    s.add('vsource', -200, 0, { ref: 'V1', value: 'DC 5' });
+    s.add('ground', -200, 60);
+    s.add('npn', 60, 0, { ref: 'Q1', props });
+    if (text != null) s.add('spice', 0, 200, { props: { text } });
+    return s;
+  };
+
+  // Naming a model emits the REFERENCE and no card of its own — the card comes
+  // from the text block.
+  const s = mk({ model: 'QVEND' }, '.model QVEND NPN (IS=1e-16 BF=200)');
+  const out = toNetlist(s).netlist;
+  check('the instance names the model', /^Q?Q1 \S+ \S+ \S+ QVEND$/m.test(out), out);
+  check('and no card is invented for it',
+        (out.match(/^\.model /gm) ?? []).length === 1, out);
+
+  // The trap this enforcement exists for: `resolveModel` only honours
+  // props.model when props.part is unset, so a component carrying both must
+  // not silently emit the part's card while the panel shows a model name.
+  const both = toNetlist(mk({ model: 'QVEND', part: 'Q_NPN_GP' },
+                            '.model QVEND NPN (IS=1e-16 BF=200)')).netlist;
+  check('with a part also set, the part wins — and that is visible',
+        !/ QVEND$/m.test(both), both);
+
+  // ERC must name the component, not leave the parser to complain about
+  // generated text.
+  const missing = mk({ model: 'QTYPO' }, '.model QVEND NPN (IS=1e-16)');
+  const codes = checkErc(missing, extractNets(missing)).map((i) => i.code);
+  check('an undefined model is reported at the component',
+        codes.includes('undefined-model'), JSON.stringify(codes));
+  const ok = mk({ model: 'QVEND' }, '.model QVEND NPN (IS=1e-16)');
+  check('a defined one is not',
+        !checkErc(ok, extractNets(ok)).map((i) => i.code).includes('undefined-model'));
+  // A warning, not a blocker: this check can only see this sheet.
+  check('it does not block simulation',
+        !hasBlockingErrors(checkErc(missing, extractNets(missing)).filter(
+          (i) => i.code === 'undefined-model')));
+}
+
+console.log(`\n${'-'.repeat(72)}\n${pass} passed, ${fail} failed`);
+if (fail) {
   console.log('\nFailures:');
   for (const f of failures) console.log('  ' + f);
   process.exit(1);

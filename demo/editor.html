@@ -614,6 +614,27 @@ function refresh() {
       // exist to model are inert. The bias rig in schematic.test.mjs passes
       // `w=20u l=2u`, so the suite was checking geometry the editor could not
       // produce.
+      // Naming a model defined ELSEWHERE — in a pasted SPICE text block, which
+      // is how a bare vendor `.model` card reaches a design (there is no
+      // filesystem, so `.include` cannot fetch one). Emits the reference and
+      // no card of its own.
+      //
+      // Mutually exclusive with the part picker, ENFORCED rather than
+      // documented: `resolveModel` only honours `props.model` when
+      // `props.part` is unset, and the picker writes `props.part` on any
+      // change. Left to drift, typing a model name and then touching the
+      // dropdown would silently emit the built-in part's card instead — the
+      // schematic naming one device and simulating another.
+      const usingModel = !!c.props.model && !c.props.part;
+      html += `<label>Model defined elsewhere</label>` +
+              `<input id="p-model" value="${esc(c.props.model ?? '')}" ` +
+              `placeholder="name from a SPICE text block">`;
+      if (usingModel) {
+        html += `<div class="note">Using <code>${esc(c.props.model)}</code>; ` +
+                `no <code>.model</code> card is emitted for ${esc(c.ref)}. ` +
+                `Clear this to go back to the part above.</div>`;
+      }
+
       html += `<label>Instance parameters</label>` +
               `<input id="p-inst" value="${esc(c.props.params ?? '')}" ` +
               `placeholder="${esc(INSTANCE_HINT[c.type] ?? 'area=1')}">`;
@@ -641,10 +662,26 @@ function refresh() {
       c.props = { ...c.props, params: e.target.value.trim() };
       editor._changed();
     });
+    document.getElementById('p-model')?.addEventListener('change', (e) => {
+      editor.commit();
+      const name = e.target.value.trim();
+      const next = { ...c.props, model: name };
+      // Naming a model takes over from the part picker. Clearing `part` is
+      // what makes `resolveModel` honour it — see the note above.
+      if (name) delete next.part; else delete next.model;
+      c.props = next;
+      editor._changed();
+      refresh();
+    });
     document.getElementById('p-part')?.addEventListener('change', (e) => {
       editor.commit();
-      c.props = { ...c.props, part: e.target.value };
+      // ...and picking a part takes over from the model name, so the panel
+      // always shows which one is actually in effect.
+      const next = { ...c.props, part: e.target.value };
+      delete next.model;
+      c.props = next;
       editor._changed();
+      refresh();
     });
   }
 }
