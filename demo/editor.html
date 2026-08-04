@@ -53,12 +53,39 @@
   }
   * { box-sizing: border-box; }
   html, body { background: var(--bg); }
+  /* Eeschema's arrangement: tools left, canvas centre, PROPERTIES right, and
+     a message/results dock along the BOTTOM. The right column previously held
+     properties, messages, every instrument, the libraries and the netlist —
+     four docks' worth of job in one 344px stack, which is why it reached
+     1,850px of content and why the things added last ended up unreachable. */
   body { margin: 0; height: 100vh; display: grid;
          grid-template-columns: 150px 1fr 344px;
+         grid-template-rows: 1fr auto;
          font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
          color: var(--fg); }
   aside, section { overflow: auto; min-width: 0; background: var(--panel); }
   #palette { border-right: 1px solid var(--line); padding: .5rem; }
+  /* The dock spans all three columns of the second row. */
+  #dock { grid-column: 1 / -1; border-top: 1px solid var(--line);
+          background: var(--panel); display: flex; flex-direction: column;
+          height: 260px; min-height: 0; }
+  #dock.collapsed { height: auto; }
+  #dock.collapsed .dock-body { display: none; }
+  .dock-tabs { display: flex; gap: .2rem; align-items: center;
+               padding: .25rem .5rem; border-bottom: 1px solid var(--line); }
+  .dock-tabs button { width: auto; margin: 0; padding: .25rem .6rem;
+                      font-size: 11px; background: transparent;
+                      border: 1px solid transparent; color: var(--muted); }
+  .dock-tabs button.on { background: var(--panel-2); color: var(--fg);
+                         border-color: var(--line); }
+  .dock-tabs .spacer { flex: 1; }
+  .dock-body { flex: 1; overflow: auto; padding: .5rem; min-height: 0; }
+  .dock-pane { display: none; }
+  .dock-pane.on { display: block; }
+  /* Instruments sit side by side in the dock, where there is width for them —
+     stacked in a 344px column they were 150px tall and mostly scrolled away. */
+  .instr-grid { display: grid; gap: .5rem;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
   #right { border-left: 1px solid var(--line); padding: .6rem;
            display: flex; flex-direction: column; gap: .45rem; }
   h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
@@ -328,6 +355,7 @@
   <div id="status">ready</div>
 </div>
 
+
 <section id="right">
   <h2>Selection</h2>
   <div id="props"><small class="muted">nothing selected</small></div>
@@ -445,6 +473,22 @@
   <h2>Netlist</h2>
   <pre id="netlist"></pre>
 </section>
+
+<div id="dock">
+  <div class="dock-tabs">
+    <button data-tab="messages" class="on">Messages</button>
+    <button data-tab="instruments">Instruments</button>
+    <button data-tab="netlist">Netlist</button>
+    <span class="spacer"></span>
+    <button id="dock-toggle" class="ghost">Hide</button>
+  </div>
+  <div class="dock-body">
+    <div class="dock-pane on" id="pane-messages"></div>
+    <div class="dock-pane" id="pane-instruments"></div>
+    <div class="dock-pane" id="pane-netlist"></div>
+  </div>
+</div>
+
 
 <script type="module">
 import { Schematic, SYMBOLS, SYMBOL_ART } from '../src/schematic/model.js';
@@ -1198,7 +1242,70 @@ function revealSection(name) {
   return null;
 }
 
+/**
+ * Move the message, results and netlist sections out of the right column and
+ * into the bottom dock.
+ *
+ * Done by RELOCATING the existing sections rather than duplicating markup: the
+ * panels keep their ids, so every handler, every `document.getElementById` and
+ * every instrument still addresses the same nodes. Rebuilding them in the dock
+ * would have meant two copies of markup that must agree, which is the shape of
+ * bug this file already produces too easily.
+ *
+ * Why these three, from Eeschema's arrangement: properties are a docked panel
+ * of their own, messages live along the bottom, and results are neither. The
+ * right column was doing all three jobs plus the libraries.
+ */
+function buildDock() {
+  const move = (names, paneId, wrapClass) => {
+    const pane = document.getElementById(paneId);
+    const wrap = wrapClass ? document.createElement('div') : pane;
+    if (wrapClass) { wrap.className = wrapClass; pane.appendChild(wrap); }
+    for (const n of names) {
+      for (const d of document.querySelectorAll('#right details.sec')) {
+        const t = d.querySelector('summary')?.textContent.trim().toLowerCase();
+        if (t && t.startsWith(n)) { d.open = true; wrap.appendChild(d); break; }
+      }
+    }
+  };
+  move(['design rules'], 'pane-messages');
+  move(['oscilloscope', 'bode', 'meter', 'sweep', '.step'], 'pane-instruments', 'instr-grid');
+  move(['netlist'], 'pane-netlist');
+
+  const tabs = [...document.querySelectorAll('.dock-tabs button[data-tab]')];
+  const show = (name) => {
+    for (const b of tabs) b.classList.toggle('on', b.dataset.tab === name);
+    for (const p of document.querySelectorAll('.dock-pane')) {
+      p.classList.toggle('on', p.id === `pane-${name}`);
+    }
+    // A canvas in a hidden pane has ZERO size, and every instrument sizes
+    // itself from getBoundingClientRect at draw time. Without this, a run made
+    // while another tab was showing comes back to a blank or wrongly-scaled
+    // plot — data present, picture missing.
+    if (name === 'instruments') requestAnimationFrame(() => { try { redrawInstruments(); } catch {} });
+    try { localStorage.setItem('spicelab.dockTab', name); } catch { /* ignore */ }
+  };
+  for (const b of tabs) b.onclick = () => show(b.dataset.tab);
+
+  const dock = document.getElementById('dock');
+  const btn = document.getElementById('dock-toggle');
+  btn.onclick = () => {
+    dock.classList.toggle('collapsed');
+    btn.textContent = dock.classList.contains('collapsed') ? 'Show' : 'Hide';
+    try { localStorage.setItem('spicelab.dockHidden', dock.classList.contains('collapsed')); }
+    catch { /* ignore */ }
+    if (!dock.classList.contains('collapsed')) {
+      requestAnimationFrame(() => { try { redrawInstruments(); } catch {} });
+    }
+  };
+  try {
+    if (localStorage.getItem('spicelab.dockHidden') === 'true') btn.onclick();
+    show(localStorage.getItem('spicelab.dockTab') || 'messages');
+  } catch { show('messages'); }
+}
+
 foldRightPanel();
+buildDock();
 
 // ---------------------------------------------------------------- simulate
 let client = null;
