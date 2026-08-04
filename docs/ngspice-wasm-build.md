@@ -27,12 +27,34 @@ emconfigure ./configure \
   --host=wasm32-unknown-emscripten \
   --with-ngshared \
   --enable-shared=no --enable-static=yes \
-  --disable-xspice --disable-osdi --disable-openmp \
+  --enable-xspice --disable-osdi --disable-openmp \
   --with-readline=no --with-editline=no --with-fftw3=no \
   CFLAGS="-O2"
 
+# XSPICE pulls in three subdirectories nothing here links. Trim them BEFORE
+# building, or the build dies:
+#   icm      the .cm code-model bundles. dlopen-ed at runtime, and the only
+#            thing that EXECUTES cmpp — the code-model preprocessor, which is a
+#            BUILD-TIME tool that must run on the HOST. Under emmake it gets
+#            cross-compiled to wasm and the build tries to run a wasm module as
+#            a program. That, not dlopen, is what actually blocked --enable-xspice.
+#   verilog  the Icarus Verilog interface: needs a shared library, dies under
+#            libtool exactly as --with-ngshared does.
+#   vhdl     same shape, same reason.
+sed -i 's|^SUBDIRS = mif cm enh evt idn cmpp icm verilog vhdl|SUBDIRS = mif cm enh evt idn|' \
+  src/xspice/Makefile
+
 emmake make STATIC=-static libngspice_la_CFLAGS=-static libngspice_la_LDFLAGS= -j8
 ```
+
+**Two traps in `scripts/build-ngspice.sh`, both of which cost a rebuild.**
+`configure` is skipped when `config.status` exists, so *changing a configure
+flag does nothing* — make re-links the existing objects and the wasm behaves
+identically; `NGSPICE_RECONFIGURE=1` forces it. And asking make for the single
+target `libngspice.la` works only when the convenience libraries
+(`frontend/libfte.la` and friends) already exist, so it passes on an
+incrementally-built tree and fails on a clean one. **A build-script change is
+not verified until it has run against a tree with nothing in it.**
 
 Produces `src/.libs/libngspice.a` (~10 MB of wasm objects). Link it into an
 application with:
@@ -88,7 +110,17 @@ but the two must agree.
   objects at runtime (confirmed: a stock build ships `analog.cm`, `digital.cm`,
   `xtradev.cm`, `tlines.cm`, `table.cm` as separate files). Emscripten can do
   this only via wasm side modules, which forces `-sMAIN_MODULE` on the main
-  binary and defeats dead-code elimination. Not worth it for Phase 0.
+  binary and defeats dead-code elimination.
+
+  **XSPICE ITSELF is now compiled in** — only the code models are missing —
+  and the cost of the remaining gap is larger than it looks. ngspice implements
+  `POLY()` on E/F/G/H sources by REWRITING the source into an XSPICE
+  code-model instance (`a$poly$e.x1.egnd`), so POLY needs the `.cm` bundles.
+  POLY is how every PARTS-generated vendor macromodel builds its supply and
+  limiting stages: **361 of the 2,073 files in the KiCad Spice Library use it**,
+  TI's own TL072 among them. Building the code models as side modules would
+  unblock POLY *and* the 74xx logic libraries in one piece of work, which makes
+  it the highest-value item left in this direction.
 - **OpenMP** and any use of `bg_run`. See the threading note below.
 - **readline/editline/fftw3.** Interactive CLI and an external FFT, neither
   needed.

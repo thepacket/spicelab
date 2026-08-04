@@ -26,7 +26,7 @@ architecture.
 | Devices | 13 kinds, MOSFET levels 1 and 3 | everything ngspice has |
 | Analyses | `.op` `.dc` `.ac` `.tran` `.tf` | the same set |
 | Value change re-solves in a frame | yes | no |
-| Size | 415 KB (155 KB gzipped) | 4.9 MB, loaded only when needed |
+| Size | ~430 KB, always loaded | ~4.9 MB, loaded only when needed |
 
 The core is Rust compiled to WebAssembly. ngspice is compiled to WebAssembly
 too, and loaded **only when a design needs something the core lacks** — a BSIM
