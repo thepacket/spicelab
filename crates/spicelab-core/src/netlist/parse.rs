@@ -736,7 +736,23 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 3
             }
         }
-        'm' => 4,
+        'm' => {
+            // 3 or 4 terminals, decided the same way as 'q': the 4th is a node
+            // only if a model name still follows it.
+            //
+            // A LEVEL 1/3 MOSFET is `M d g s b MODEL`, but a VDMOS power FET is
+            // `M d g s MODEL` — its body diode is intrinsic, so there is no
+            // substrate terminal. Fixed at 4, the parser ate the model name as
+            // the fourth node and then reported "missing model name" as
+            // INVALID, which stops engine selection: a power FET placed from
+            // the palette was blamed on the user AND blocked from reaching
+            // ngspice, which implements it.
+            if pos.len() >= 5 {
+                4
+            } else {
+                3
+            }
+        }
         'x' => pos.len().saturating_sub(1), // all but the subckt name
         _ => 2,
     };

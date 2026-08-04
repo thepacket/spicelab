@@ -307,6 +307,22 @@ than a bug:
   declaration order" — data we had already parsed. Pin order is the netlist
   contract; asking a human to re-key it is manufacturing the error.
 
+**A three-terminal `M` card was reported as INVALID.** The node count for `M`
+was fixed at 4, but a VDMOS power FET is `M d g s MODEL` — no substrate
+terminal, because its body diode is intrinsic. The parser ate the model name as
+the fourth node and then reported "missing model name" as **`invalid`**, which
+STOPS engine selection: a power FET placed from the palette was blamed on the
+user AND blocked from reaching ngspice, which implements it. The `Q` card had
+always got this right ("the 4th is a node only if a model name follows"); `M`
+simply never learned it.
+
+Worth noting how it was found: the README claimed power FETs "are placeable but
+run on the coverage engine", Andre asked whether that was true, and checking it
+end to end rather than re-reading the sentence exposed the bug. **A doc claim is
+a testable assertion.** It also removed a corpus false positive — one netlist
+had been building a 3-node card as a 4-node level 1 MOSFET and reporting
+success, which is the CIDER failure again in a different device.
+
 **Audit for defaults that swallow the unknown**: a `_` arm, a `??` fallback, a
 trailing `else`. Each one converts "I do not recognise this" into "I will treat
 it as the common case", and every instance above produced a believable wrong

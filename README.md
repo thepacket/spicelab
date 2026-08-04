@@ -120,8 +120,9 @@ that caught it. It is the most useful file in the repository.
   (levels 1 and 3). ngspice ships **59** device implementations, and roughly
   half of those are alternative MOSFET and BJT model families — BSIM, HiSIM,
   VBIC, SOI, HFET — rather than different element types. **That is the real
-  gap: no BSIM, so no modern IC process work in the interactive core.** JFETs
-  and power FETs are placeable, but they route to the coverage engine.
+  gap: no BSIM, so no modern IC process work in the interactive core.**
+  (JFETs and power FETs *are* placeable and do simulate — they route to the
+  coverage engine, which is the two-engine design working, not a limitation.)
 - **No bundled part library.** Vendor models are free to download and use but
   not ours to redistribute, so they are fetched into your browser rather than
   shipped here. Nothing is uploaded either way.

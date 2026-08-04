@@ -517,6 +517,38 @@ fn unsupported_mosfet_level_is_rejected() {
     }
 }
 
+/// A three-terminal `M` card is a VDMOS, and must ROUTE rather than be refused.
+///
+/// The node count for `M` was fixed at 4, so a VDMOS — `M d g s MODEL`, no
+/// substrate terminal because its body diode is intrinsic — had its model name
+/// eaten as the fourth node, and the card was then reported as "missing model
+/// name" with kind INVALID. `invalid` STOPS engine selection, so a power FET
+/// placed from the palette was blamed on the user AND blocked from reaching
+/// ngspice, which implements it. It emitted exactly this card.
+#[test]
+fn three_terminal_mosfet_card_is_a_vdmos() {
+    let vdmos = "t\nVD d 0 10\nVG g 0 5\nM1 d g 0 PM\n\
+                 .model PM VDMOS (nchan Vto=4 Kp=5.9)\n.end";
+    let nl = parse(vdmos).unwrap();
+    let e = match build(&nl) {
+        Ok(_) => panic!("a VDMOS built as if it were a level 1 MOSFET"),
+        Err(e) => e,
+    };
+    assert_eq!(
+        e.kind,
+        ErrorKind::Unsupported,
+        "must stay eligible for the coverage engine, not be called malformed: {}",
+        e.message
+    );
+    assert!(e.message.to_lowercase().contains("vdmos"), "unhelpful: {}", e.message);
+
+    // The four-terminal form must still build here — this is the case the
+    // three-terminal rule could most easily break.
+    let mos = "t\nVD d 0 5\nVG g 0 3\nM1 d g 0 0 MM w=20u l=2u\n\
+               .model MM NMOS (VTO=1 KP=2e-5)\n.end";
+    assert!(build(&parse(mos).unwrap()).is_ok(), "a 4-node MOSFET stopped building");
+}
+
 /// A `.model` card's TYPE must match the device that references it.
 ///
 /// Every model reader used to pick behaviour with a match ending in `_`, so an

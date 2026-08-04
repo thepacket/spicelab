@@ -980,6 +980,20 @@ pub fn build(nl: &Netlist) -> Result<Circuit, ParseError> {
                 let sub = if n.len() > 3 { n[3] } else { -1 };
                 DeviceKind::Bjt(Bjt::new(&e.name, n[0], n[1], n[2], sub, bjt_model(e)?))
             }
+            'm' if n.len() < 4 => {
+                // A three-terminal M card is a VDMOS. This core implements the
+                // four-terminal Shichman-Hodges and level 3 devices only, so
+                // say so and let it route — indexing n[3] here would panic.
+                return err_kind(
+                    e.line,
+                    format!(
+                        "{}: a three-terminal M card is a VDMOS power FET, \
+                         which this core does not implement",
+                        e.name
+                    ),
+                    ErrorKind::Unsupported,
+                );
+            }
             'm' => DeviceKind::Mosfet(Mosfet::new(
                 &e.name,
                 n[0],
