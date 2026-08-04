@@ -244,6 +244,7 @@
   </div>
 
   <pre id="four-out" style="display:none"></pre>
+  <pre id="meas-out" style="display:none"></pre>
 
   <h2>Meter</h2>
   <div id="meter"><small class="muted">route a probe to the meter</small></div>
@@ -316,6 +317,7 @@ import { Schematic, SYMBOLS } from '../src/schematic/model.js';
 import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
 import { probeColor } from '../src/instruments/probe.js';
 import { fourier } from '../src/instruments/fourier.js';
+import { measureAll, signalsIn } from '../src/instruments/measure.js';
 import { MODEL_SOURCES, CIRCUIT_SOURCES, LICENCE_NOTE } from '../src/schematic/libraries.js';
 import { Editor } from '../src/schematic/editor.js';
 import { toNetlist } from '../src/schematic/emit.js';
@@ -1224,6 +1226,16 @@ document.getElementById('run-tran').onclick = async () => {
     });
     document.getElementById('four-out').style.display = 'none';
 
+    // `.measure` needs whichever signals its cards name — only those. Keeping
+    // every unknown would be simpler and is exactly what streaming through a
+    // ring exists to avoid: the rows are the whole solution vector.
+    const meas = { t: [], cols: new Map() };
+    for (const nameOf of signalsIn(current.netlist)) {
+      const col = info.labels.findIndex((l) => l.toLowerCase() === nameOf);
+      if (col >= 0) meas.cols.set(nameOf, { col, v: [] });
+    }
+    document.getElementById('meas-out').style.display = 'none';
+
     const t0 = performance.now();
     const stats = await c.tran(
       { tstop, tstep, tmax: tstep / 2, method: 'trap' },
@@ -1236,10 +1248,32 @@ document.getElementById('run-tran').onclick = async () => {
             f.v.push(view[r * stride + 1 + f.col]);
           }
         }
+        if (meas.cols.size) {
+          for (let r = 0; r < n; r++) {
+            meas.t.push(view[r * stride]);
+            for (const c of meas.cols.values()) c.v.push(view[r * stride + 1 + c.col]);
+          }
+        }
         drawScope();
       },
     );
     drawScope();
+
+    // Measurements first: they are numbers the user asked for by name, and
+    // burying them under a Fourier table would be the wrong emphasis.
+    const results = measureAll(current.netlist,
+      { t: meas.t, get: (nm) => meas.cols.get(nm.toLowerCase())?.v ?? null });
+    if (results.length) {
+      const el = document.getElementById('meas-out');
+      el.style.display = '';
+      // A failed measurement is shown IN PLACE, with its reason. Dropping it
+      // would leave the user comparing a shorter list against their netlist to
+      // work out which card did not run.
+      el.textContent = results.map((m) =>
+        m.error
+          ? `${m.name} = —   (${m.func}: ${m.error})`
+          : `${m.name} = ${eng(m.value, m.unit ?? '')}   (${m.func})`).join('\n');
+    }
 
     for (const f of four) {
       if (f.col < 0) {

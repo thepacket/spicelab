@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build:wasm": "./scripts/build-wasm.sh",
-    "test": "npm run test:js && npm run test:ring && npm run test:stream && npm run test:engines && npm run test:ngspice-engine && npm run test:schematic && npm run test:models && npm run test:fourier && npm run test:probes && npm run test:batch && npm run test:corpus && npm run test:ngspice && npm run test:rust",
+    "test": "npm run test:js && npm run test:ring && npm run test:stream && npm run test:engines && npm run test:ngspice-engine && npm run test:schematic && npm run test:models && npm run test:fourier && npm run test:measure && npm run test:probes && npm run test:batch && npm run test:corpus && npm run test:ngspice && npm run test:rust",
     "test:js": "node tests/analytic.test.mjs",
     "test:ring": "node tests/ring.test.mjs",
     "test:stream": "node tests/stream.test.mjs",
@@ -21,6 +21,7 @@
     "test:ngspice-engine": "node tests/ngspice-engine.test.mjs",
     "test:corpus": "node tests/corpus.test.mjs",
     "test:fourier": "node tests/fourier.test.mjs",
+    "test:measure": "node tests/measure.test.mjs",
     "test:models": "node tests/model-library.test.mjs"
   },
   "license": "GPL-3.0-or-later",

@@ -86,8 +86,24 @@ const CORPORA = [
     subdirs: ['Netlists'],
     pattern: /\.cir$/i,
     maxBytes: 3072,
-    budget: 150,
-    minOk: 1200,
+    // RAISED 150 -> 165 on 2026-08-04, the only time this has gone up, and the
+    // reason is recorded because the rule is otherwise "never raise".
+    //
+    // Accepting `.measure` took `ok` from 1,202 to 1,439 — 237 more netlists
+    // now parse to the end instead of stopping at their first measure card.
+    // Some of those reach a LATER problem that was previously never seen, so
+    // `invalid` rose with them. Nothing got worse: those netlists did not
+    // simulate before either, they were merely misfiled as `unsupported`, and
+    // for several the new verdict is the more accurate one — this corpus
+    // contains NEGATIVE tests, decks written to prove Xyce rejects them
+    // (`specials_in_subckt_dot_param.cir` says so in its own header), and
+    // `invalid` is the right answer there.
+    //
+    // The remaining causes are a long tail: models that a missing `.include`
+    // would have defined, mutual-inductance references, short `.tran` cards.
+    // Ratchet down from 165.
+    budget: 165,
+    minOk: 1400,
     hint: 'git clone --depth 1 https://github.com/Xyce/Xyce_Regression .xyce-regression',
   },
 ];

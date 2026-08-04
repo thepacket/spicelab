@@ -35,7 +35,14 @@ pub enum ExprError {
 /// These are BUILT-INS of the language, not user parameters, so an expression
 /// using one is valid SPICE this core does not implement, and must be reported
 /// as such rather than as an undefined name.
-const BUILTIN_VARS: &[&str] = &["freq", "hertz", "time", "temper", "temp", "vt"];
+const BUILTIN_VARS: &[&str] = &[
+    "freq", "hertz", "time", "temper", "temp", "vt",
+    // Bare `exp` and `pi` are the CONSTANTS e and pi in the PSpice/Xyce
+    // family, not calls. `exp` is also a function name here, so without this
+    // an expression like `{exp}` came back as an undefined parameter — which
+    // blames the user for writing something their simulator documents.
+    "exp", "pi",
+];
 
 impl ExprError {
     /// Whether this failure means "not implemented here" rather than "wrong".

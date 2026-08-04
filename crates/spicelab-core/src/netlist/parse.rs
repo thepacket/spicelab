@@ -626,6 +626,19 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 return Ok(());
             }
             "ac" => {
+                // `.AC DATA=<table>` sweeps from a `.DATA` table instead of a
+                // range. It is a real Xyce form, not a short card, so saying
+                // "needs scale, points, start, stop" blamed the user for a
+                // feature gap AND stopped the netlist reaching a bigger engine.
+                if toks[1..].iter().any(|t| {
+                    t.len() > 5 && t[..5].eq_ignore_ascii_case("data=")
+                }) {
+                    return err_kind(
+                        lineno,
+                        ".ac with a DATA table is not implemented".to_string(),
+                        ErrorKind::Unsupported,
+                    );
+                }
                 if toks.len() < 5 {
                     return err(lineno, ".ac needs scale, points, start, stop");
                 }
@@ -665,7 +678,8 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 return Ok(());
             }
             "ends" | "eom" | "end" | "title" | "probe" | "print" | "plot" | "width"
-            | "temp" | "nodeset" | "ic" | "save" | "four" | "fourier" => {
+            | "temp" | "nodeset" | "ic" | "save" | "four" | "fourier" | "measure"
+            | "meas" => {
                 // Accepted and ignored: output/formatting directives that do not
                 // affect the solved circuit. Ignoring beats rejecting, because a
                 // vendor model file is full of them.
@@ -676,6 +690,10 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
                 // routed to ngspice for its DEVICES does not lose it. The host
                 // reads the card back out of the netlist text and runs it after
                 // the transient; the solver has nothing to do for it.
+                //
+                // `.measure` is here for the same reason: it extracts a number
+                // from a COMPLETED run, and lives in
+                // `src/instruments/measure.js` so it serves either engine.
                 return Ok(());
             }
             other => {
