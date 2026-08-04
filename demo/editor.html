@@ -184,10 +184,22 @@
   <button data-place="diode">Diode</button>
   <button data-place="vsource">V source</button>
   <button data-place="isource">I source</button>
+  <!-- BOTH polarities of every device, deliberately.
+       A component's `type` is fixed once placed: `partsFor` lists only parts
+       of that kind and `assignPart` refuses a kind mismatch — correctly, since
+       a PNP card on an NPN symbol simulates happily and answers wrongly. The
+       consequence is that a polarity missing from this palette is unreachable
+       from the editor ENTIRELY. It was: PNP, PMOS, P-JFET and P-channel power
+       FETs could not be placed at all, which stranded the built-in PNP and
+       PMOS cards and 15,048 p-type parts in the downloadable library. -->
   <button data-place="npn">NPN</button>
+  <button data-place="pnp">PNP</button>
   <button data-place="nmos">NMOS</button>
-  <button data-place="njf">JFET</button>
-  <button data-place="nvdmos">Power FET</button>
+  <button data-place="pmos">PMOS</button>
+  <button data-place="njf">N-JFET</button>
+  <button data-place="pjf">P-JFET</button>
+  <button data-place="nvdmos">N power FET</button>
+  <button data-place="pvdmos">P power FET</button>
   <button data-place="sw">Switch</button>
   <button data-place="ground">Ground</button>
 

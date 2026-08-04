@@ -11,6 +11,7 @@
  * solver -> compared against the same circuit written by hand.
  */
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { Schematic } from '../src/schematic/model.js';
 import { extractNets, netAt, netNameOfPin, onSegmentInterior } from '../src/schematic/nets.js';
 import { checkErc, hasBlockingErrors } from '../src/schematic/erc.js';
@@ -429,6 +430,31 @@ console.log('\nEvery palette part emits a simulatable netlist');
   check('every device symbol has its own drawing',
         needsArt.every((t) => typeof ART[t] === 'function'),
         JSON.stringify(needsArt.filter((t) => typeof ART[t] !== 'function')));
+
+  // EVERY symbol must be placeable from the palette.
+  //
+  // A component's `type` is fixed once placed — `partsFor` offers only parts of
+  // that kind, and `assignPart` refuses a kind mismatch, both correctly, since
+  // a PNP card on an NPN symbol simulates happily and answers wrongly. So a
+  // symbol with no palette button is not merely inconvenient, it is
+  // UNREACHABLE. `pnp`, `pmos`, `pjf` and `pvdmos` all were: the symbols, the
+  // art and validated built-in cards existed, and nothing could place one.
+  //
+  // Reading the palette out of the HTML is deliberately crude. The alternative
+  // is asserting a hand-written list, which is the same list that was wrong.
+  {
+    const html = readFileSync(new URL('../demo/editor.html', import.meta.url), 'utf8');
+    const placeable = new Set(
+      [...html.matchAll(/data-place="([a-z0-9]+)"/gi)].map((m) => m[1]));
+    const missing = Object.keys(SYMBOLS).filter((t) => !placeable.has(t));
+    check('every symbol has a palette button', missing.length === 0,
+          `unreachable from the editor: ${JSON.stringify(missing)}`);
+    // And the reverse: a button for a symbol that does not exist would throw
+    // on click.
+    const bogus = [...placeable].filter((t) => !SYMBOLS[t]);
+    check('every palette button names a real symbol', bogus.length === 0,
+          JSON.stringify(bogus));
+  }
 
   // Provenance must stay attached: these are redistributed under ngspice's
   // Modified BSD, which requires attribution.
