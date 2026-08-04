@@ -21,6 +21,19 @@ export const GRID = 10;
  * Component library. `pins` are ordered — the order is the netlist terminal
  * order, so it must match what the netlist emitter expects for each type.
  */
+/**
+ * KiCad symbols a `subckt` instance may adopt, keyed by lowercased name.
+ *
+ * Filled by the editor from IndexedDB and read SYNCHRONOUSLY here, because
+ * `pinsOf` runs during layout, hit-testing and net extraction. An async read
+ * in that path would make a pin's position depend on whether storage had
+ * answered yet — and net extraction turns pin positions into connectivity, so
+ * the schematic would connect differently on a slow load.
+ *
+ * Mutated in place, never rebound: the same rule `COLORS` and `SERIES` follow.
+ */
+export const SYMBOL_ART = new Map();
+
 export const SYMBOLS = {
   // Two-terminal passives: pin 0 is the positive terminal.
   resistor: { prefix: 'R', pins: [{ name: '1', x: 0, y: -20 }, { name: '2', x: 0, y: 20 }] },
@@ -268,6 +281,26 @@ export const SYMBOLS = {
     pinsFor(c) {
       const names = subcktPins(c.props?.pins);
       if (!names.length) return [];
+
+      // A KiCad symbol adopted by this instance, if any. Its terminals are
+      // taken in PIN-NUMBER order and matched to the declared pin list
+      // positionally — pin order is the netlist contract, and the whole point
+      // of drawing a real symbol is being able to SEE that contract, so the
+      // mapping has to be the obvious one and nothing cleverer.
+      //
+      // The symbol is looked up synchronously from a cache the editor fills;
+      // `pinsOf` is called during layout and hit-testing, and an async read
+      // there would make a pin's position depend on whether IndexedDB had
+      // answered yet.
+      const art = SYMBOL_ART.get(String(c.props?.symbol ?? '').toLowerCase());
+      if (art?.pins?.length) {
+        // Extra declared pins keep the box layout below rather than being
+        // dropped: losing one would silently shorten the X card.
+        const n = Math.min(names.length, art.pins.length);
+        if (n === names.length) {
+          return names.map((name, i) => ({ name, x: art.pins[i].x, y: art.pins[i].y }));
+        }
+      }
       // Laid out down both sides of a box, in declaration order: left column
       // top to bottom, then right column top to bottom.
       const left = Math.ceil(names.length / 2);

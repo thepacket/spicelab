@@ -13,8 +13,9 @@
  * deliberately joined) are drawn too. Deriving them means the dot you see
  * always reflects what the extractor actually did.
  */
-import { SYMBOLS, isDirective, pinsOf } from './model.js';
+import { SYMBOLS, SYMBOL_ART, isDirective, pinsOf } from './model.js';
 import { onSegmentInterior } from './nets.js';
+import { drawSymbol } from './symbol-library.js';
 
 /**
  * Palettes. Dark is the default and the one the product ships; a light variant
@@ -554,6 +555,38 @@ export class Renderer {
     const { g } = this;
     const pins = pinsOf(c);
     const off = c.enabled === false;
+
+    // An adopted KiCad symbol replaces the box entirely. Drawn through the
+    // same translate/rotate/mirror as every other symbol, so the picture and
+    // `pinPositions` cannot disagree — the rule that keeps a schematic from
+    // showing one circuit and simulating another.
+    const art = SYMBOL_ART.get(String(c.props?.symbol ?? '').toLowerCase());
+    if (art?.sym) {
+      g.save();
+      g.translate(c.x, c.y);
+      g.rotate((c.rot * Math.PI) / 180);
+      if (c.mirror) g.scale(-1, 1);
+      g.strokeStyle = isSelected ? COLORS.selected : (off ? COLORS.muted : COLORS.symbol);
+      g.fillStyle = g.strokeStyle;
+      g.lineWidth = 1.6;
+      g.lineJoin = 'round';
+      if (off) g.setLineDash([4, 3]);
+      drawSymbol(g, art.sym);
+      g.restore();
+
+      g.fillStyle = COLORS.pin;
+      for (const p of sch.pinPositions(c)) {
+        g.beginPath();
+        g.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.fillStyle = isSelected ? COLORS.selected : COLORS.label;
+      g.font = '9px ui-monospace, monospace';
+      g.textAlign = 'left';
+      g.fillText(c.ref, c.x + 8, c.y - 24);
+      g.fillText(String(c.props?.name ?? ''), c.x + 8, c.y - 14);
+      return;
+    }
     const half = pins.length ? Math.max(20, ((Math.ceil(pins.length / 2) - 1) * 20) / 2 + 14) : 20;
 
     g.save();

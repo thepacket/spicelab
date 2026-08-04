@@ -113,7 +113,10 @@
   /* Downloaded-library panel. Theme-aware via the same custom properties as
      everything else — a hard-coded colour here would survive the theme toggle
      and leave a light strip on the dark page. */
-  #lib-dl { margin-top: .4rem; }
+  #lib-dl, #sym-dl { margin-top: .4rem; }
+  #sym-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  #sym-dl .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+  #sym-results { max-height: 170px; overflow-y: auto; }
   #lib-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   #lib-dl .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
   #lib-results { max-height: 190px; overflow-y: auto; }
@@ -324,6 +327,25 @@
       <div class="row"><button id="lib-cancel" class="ghost">Cancel</button></div>
     </div>
   </div>
+  <!-- KiCad SYMBOLS: a separate download from the models, with its own
+       licence and its own store. A user may want one and not the other. -->
+  <div id="sym-dl">
+    <div class="what" id="sym-state">checking for symbols…</div>
+    <div class="row"><button id="sym-get">Download KiCad symbols…</button></div>
+    <div class="row" id="sym-search-row" style="display:none">
+      <input id="sym-q" placeholder="search symbols — e.g. tl072, opamp, ne555">
+    </div>
+    <div id="sym-results"></div>
+    <div class="row" id="sym-remove-row" style="display:none">
+      <button id="sym-clear" class="ghost">Remove symbols</button>
+    </div>
+    <div id="sym-progress" style="display:none">
+      <div class="bar"><div id="sym-bar"></div></div>
+      <div class="what" id="sym-pct"></div>
+      <div class="row"><button id="sym-cancel" class="ghost">Cancel</button></div>
+    </div>
+  </div>
+
   <details id="libs"><summary>where to get models and circuits</summary>
     <div id="libs-body"></div>
   </details>
@@ -333,7 +355,12 @@
 </section>
 
 <script type="module">
-import { Schematic, SYMBOLS } from '../src/schematic/model.js';
+import { Schematic, SYMBOLS, SYMBOL_ART } from '../src/schematic/model.js';
+import { symbolPins } from '../src/schematic/symbol-library.js';
+import {
+  listSymbolFiles, downloadSymbols, saveSymbols, symbolMeta, getSymbol,
+  searchSymbols, clearSymbols, SYMBOL_LIB,
+} from '../src/schematic/symbol-store.js';
 import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
 import { probeColor } from '../src/instruments/probe.js';
 import { fourier } from '../src/instruments/fourier.js';
@@ -739,6 +766,8 @@ document.getElementById('open').onclick = () => {
   inp.onchange = async () => {
     const doc = JSON.parse(await inp.files[0].text());
     editor.load(doc);
+    // Adopted symbols must be back in the cache before anything reads a pin.
+    await window.__spicelabCacheSymbols?.();
     if (doc.probes) {
       const loaded = ProbeSet.fromJSON(doc.probes);
       probes.probes = loaded.probes;
@@ -1627,6 +1656,189 @@ function drawStepFamily(spec, results, probe) {
   g.fillText(`${probe.label} vs ${spec.param} ` +
              `(${eng(spec.values[0], '')} .. ${eng(spec.values[spec.values.length - 1], '')})`,
              padL + 4 * d, padT + 10 * d);
+}
+
+/**
+ * KiCad symbols: download, search, adopt.
+ *
+ * Same contract as the model library — one explicit user action, parsed here,
+ * kept in this browser, never bundled or uploaded. See symbol-library.js for
+ * the source routing and the licence.
+ */
+{
+  // Local: the identically-named helper in the model-library block above is
+  // block-scoped, so referencing it here threw a ReferenceError at module top
+  // level — which killed every statement AFTER this block too, including the
+  // .step button. A shared helper would be better; a local one is honest.
+  const el = (id) => document.getElementById(id);
+  const symState = el('sym-state');
+  let symAbort = null;
+
+  /** Cache a parsed symbol where `pinsOf` and the renderer can read it
+   *  SYNCHRONOUSLY. Net extraction turns pin positions into connectivity, so a
+   *  pin whose position depended on whether IndexedDB had answered would make
+   *  the schematic connect differently on a slow load. */
+  async function cacheSymbol(name) {
+    const key = String(name).toLowerCase();
+    if (!key || SYMBOL_ART.has(key)) return SYMBOL_ART.get(key);
+    const sym = await getSymbol(key);
+    if (!sym) return null;
+    const entry = { sym, pins: symbolPins(sym) };
+    SYMBOL_ART.set(key, entry);
+    return entry;
+  }
+
+  // Published so the Open handler can refill the cache. Without it, a saved
+  // design reopens with its adopted symbols drawn as boxes AND its pins back
+  // on the box layout — and pin positions are what net extraction turns into
+  // connectivity, so the reopened schematic would wire up differently from the
+  // one that was saved.
+  window.__spicelabCacheSymbols = () => cacheDocumentSymbols();
+
+  /** Re-cache every symbol the open document adopts. Without this, a saved
+   *  design reopens with its parts drawn as boxes and its pins back on the
+   *  box layout — the geometry silently different from when it was saved. */
+  async function cacheDocumentSymbols() {
+    const names = new Set(editor.sch.components
+      .filter((c) => c.type === 'subckt' && c.props?.symbol)
+      .map((c) => String(c.props.symbol).toLowerCase()));
+    let any = false;
+    for (const n of names) if (await cacheSymbol(n)) any = true;
+    if (any) { editor._changed?.(); refresh(); }
+  }
+
+  async function refreshSymState() {
+    if (!storageAvailable()) {
+      symState.textContent = 'This browser cannot store symbols (no IndexedDB).';
+      el('sym-get').disabled = true;
+      return;
+    }
+    const meta = await symbolMeta();
+    const have = !!meta;
+    el('sym-search-row').style.display = have ? '' : 'none';
+    el('sym-remove-row').style.display = have ? '' : 'none';
+    el('sym-get').textContent = have
+      ? 'Re-download KiCad symbols…' : 'Download KiCad symbols…';
+    symState.innerHTML = have
+      ? `<b>${meta.symbols.toLocaleString()}</b> symbols stored in this browser.
+         Adopt one from a Subcircuit block's properties.`
+      : `Draws a Subcircuit as the part it is, instead of a box — which matters
+         because <b>pin order is the netlist contract</b> and a labelled symbol
+         is how you check it. Fetches ~7 MB from GitHub into this browser.
+         CC-BY-SA 4.0: free to use in your designs, not ours to redistribute.`;
+    if (have) await cacheDocumentSymbols();
+  }
+
+  el('sym-get').onclick = async () => {
+    if (symAbort) return;
+    symAbort = new AbortController();
+    el('sym-progress').style.display = '';
+    el('sym-get').disabled = true;
+    try {
+      status('listing symbol files…');
+      const files = await listSymbolFiles({ signal: symAbort.signal });
+      symState.textContent = `${files.length} libraries to fetch.`;
+      const res = await downloadSymbols({
+        files, signal: symAbort.signal,
+        onProgress: ({ done, total, symbols }) => {
+          el('sym-bar').style.width = ((done / total) * 100).toFixed(1) + '%';
+          el('sym-pct').textContent =
+            `${done} / ${total} files · ${symbols.toLocaleString()} symbols`;
+        },
+      });
+      el('sym-pct').textContent = 'storing…';
+      const meta = await saveSymbols({
+        symbols: res.symbols,
+        meta: { source: SYMBOL_LIB.home, ref: SYMBOL_LIB.ref, note: SYMBOL_LIB.note },
+      });
+      // A file that failed is REPORTED. Silently storing a short library would
+      // leave a symbol missing with no explanation later.
+      status(`stored ${meta.symbols.toLocaleString()} symbols` +
+             (res.failed ? ` (${res.failed} file(s) failed)` : ''));
+    } catch (e) {
+      status(e?.name === 'AbortError' ? 'symbol download cancelled'
+                                      : 'symbol download failed: ' + e.message);
+    } finally {
+      symAbort = null;
+      el('sym-get').disabled = false;
+      el('sym-progress').style.display = 'none';
+      el('sym-bar').style.width = '0';
+      await refreshSymState();
+    }
+  };
+
+  el('sym-cancel').onclick = () => symAbort?.abort();
+
+  el('sym-clear').onclick = async () => {
+    await clearSymbols();
+    SYMBOL_ART.clear();
+    el('sym-results').innerHTML = '';
+    el('sym-q').value = '';
+    refresh();
+    status('symbols removed');
+    await refreshSymState();
+  };
+
+  let symTimer = 0;
+  el('sym-q').oninput = () => {
+    clearTimeout(symTimer);
+    symTimer = setTimeout(runSymSearch, 150);
+  };
+
+  async function runSymSearch() {
+    const q = el('sym-q').value.trim();
+    const box = el('sym-results');
+    if (!q) { box.innerHTML = ''; return; }
+    const hits = await searchSymbols(q, 25);
+    if (!hits.length) { box.innerHTML = '<div class="what">no match</div>'; return; }
+    const rows = [];
+    for (const h of hits) {
+      const sym = await getSymbol(h.name);
+      if (!sym) continue;
+      rows.push(`<div class="hit">
+        <div class="nm">${esc(sym.name)} <span class="src">${sym.pins.length} pins</span></div>
+        <div class="src">${esc(sym.path ?? '')}</div>
+        <div class="row"><button data-sym="${esc(h.name)}">Use for selected</button></div>
+      </div>`);
+    }
+    box.innerHTML = rows.join('');
+    for (const b of box.querySelectorAll('button[data-sym]')) {
+      b.onclick = () => adoptSymbol(b.dataset.sym);
+    }
+  }
+
+  /**
+   * Give the selected Subcircuit a symbol.
+   *
+   * The pin COUNTS must match. A symbol's terminals map onto the declared pin
+   * list positionally — that is the whole point, since pin order is the
+   * contract — so adopting a 5-pin symbol for a 3-pin subcircuit would either
+   * drop terminals or invent them, and either way the picture would stop
+   * describing the netlist. Refused with both numbers rather than adapted.
+   */
+  async function adoptSymbol(name) {
+    const sel = editor.sch.components.filter((c) => editor.selected.has(c.id));
+    if (sel.length !== 1 || sel[0].type !== 'subckt') {
+      status('select exactly one Subcircuit block first');
+      return;
+    }
+    const c = sel[0];
+    const entry = await cacheSymbol(name);
+    if (!entry) { status(`"${name}" is not in the stored symbols`); return; }
+    const want = (c.props.pins ?? '').trim().split(/[\s,]+/).filter(Boolean).length;
+    if (want !== entry.pins.length) {
+      status(`${entry.sym.name} has ${entry.pins.length} pins but ${c.ref} ` +
+             `declares ${want} — not adopting`);
+      return;
+    }
+    editor.commit();
+    c.props = { ...c.props, symbol: String(name).toLowerCase() };
+    editor._changed();
+    refresh();
+    status(`${c.ref} now draws as ${entry.sym.name}`);
+  }
+
+  refreshSymState();
 }
 
 // ---------------------------------------------------------------- sweep
