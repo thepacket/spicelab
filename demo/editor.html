@@ -1072,26 +1072,75 @@ function describe(part) {
   return found.join(' ');
 }
 
-/** Group a part by where it came from — the natural browse axis. */
+/**
+ * Group a part for browsing.
+ *
+ * NOT by directory, which was the first attempt and was useless: **1,794 of
+ * the KiCad library's 2,073 files sit under `uncategorized/`**, and one vendor
+ * dump inside it holds 733 more, split across subdirectories whose names are
+ * identical up to the width of the column. The result was dozens of groups all
+ * reading "uncategorized/Bordodynovs Electronics …". Faithfully reproducing a
+ * taxonomy that does not exist is not organisation.
+ *
+ * So three axes, in the order a parts catalogue actually uses:
+ *
+ *   1. The library's REAL categories, where it has them — Diode, Transistor,
+ *      Operational Amplifier, Digital Logic, Optocoupler. Few, but honest.
+ *   2. Manufacturer, by manufacturer NAME alone.
+ *   3. Everything else by part-number PREFIX — 1N…, 2N…, BC…, IRF…. That is
+ *      how vendor part numbers are looked up, it is stable, and every label is
+ *      distinguishable at a glance, which the directory names were not.
+ */
+const REAL_CATEGORIES = new Set([
+  'diode', 'transistor', 'operational amplifier', 'digital logic', 'optocoupler',
+]);
+
 function groupOf(part) {
   if (!part.id.startsWith('lib:')) return 'Built-in (validated)';
   const at = part.id.indexOf('@');
   const hash = part.id.lastIndexOf('#');
   const path = at >= 0 ? part.id.slice(at + 1, hash > at ? hash : undefined) : '';
-  const clean = path.replace(/^Models[/_]/, '').replace(/_/g, '/');
-  const dir = clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : clean;
-  return dir || 'Uncategorised';
+  const segs = path.replace(/^Models\//, '').split('/');
+  const top = (segs[0] ?? '').toLowerCase();
+
+  if (top === 'manufacturer' && segs[1]) return segs[1];
+  if (REAL_CATEGORIES.has(top)) return segs[0];
+
+  // Part-number prefix: the leading letters, or letters after a leading digit
+  // group, so 1N4148 -> "1N", 2N2222 -> "2N", BAV99 -> "BA", IRF540 -> "IR".
+  const name = (part.label.split(' — ')[0] ?? '').toUpperCase();
+  const m = /^(\d*[A-Z]{1,3})/.exec(name);
+  return m ? `${m[1]}…` : 'Other';
+}
+
+/** Built-ins first, then real categories, then manufacturers, then prefixes. */
+function groupRank(name) {
+  if (name === 'Built-in (validated)') return 0;
+  if (REAL_CATEGORIES.has(name.toLowerCase())) return 1;
+  if (/…$/.test(name)) return 3;
+  return name === 'Other' ? 4 : 2;
 }
 
 function openPartPicker(c) {
   PP.target = c;
-  PP.all = partsFor(c.type).map((p) => ({ ...p,
-    _name: p.label.split(' — ')[0], _grp: groupOf(p), _desc: describe(p) }));
-  PP.groups = new Map();
+  PP.all = partsFor(c.type).map((p) => {
+    const [name, where] = p.label.split(' — ');
+    // The source file follows the part into the DESCRIPTION rather than being
+    // the group, because this library defines the same name in many files —
+    // `2n2222` appears in five with different parameters — so the file is what
+    // distinguishes two rows that otherwise read identically. It was carrying
+    // the grouping before, badly; here it earns its place.
+    const desc = describe(p);
+    return { ...p, _name: name, _where: where ?? '', _grp: groupOf(p),
+             _desc: desc, _search: `${name} ${desc} ${where ?? ''}`.toLowerCase() };
+  });
+  const byGroup = new Map();
   for (const p of PP.all) {
-    if (!PP.groups.has(p._grp)) PP.groups.set(p._grp, []);
-    PP.groups.get(p._grp).push(p);
+    if (!byGroup.has(p._grp)) byGroup.set(p._grp, []);
+    byGroup.get(p._grp).push(p);
   }
+  PP.groups = new Map([...byGroup].sort((a, b) =>
+    groupRank(a[0]) - groupRank(b[0]) || a[0].localeCompare(b[0])));
   // Built-ins expanded by default: they are the curated, validated set and the
   // sensible first answer. Everything else starts collapsed, which is what
   // makes 51,533 candidates browsable at all.
@@ -1108,8 +1157,7 @@ function openPartPicker(c) {
 /** Flatten groups + expanded children into the row list the virtualiser draws. */
 function ppBuild(query) {
   const t = String(query).trim().toLowerCase();
-  const match = (p) => !t || p._name.toLowerCase().includes(t)
-                    || p._desc.toLowerCase().includes(t) || p._grp.toLowerCase().includes(t);
+  const match = (p) => !t || p._search.includes(t) || p._grp.toLowerCase().includes(t);
   PP.rows = [];
   let shown = 0;
   for (const [grp, parts] of PP.groups) {
@@ -1148,7 +1196,8 @@ function ppRender() {
     const on = (PP.sel ? p.id === PP.sel : p.id === cur) ? ' sel' : '';
     return `<div class="pp-row${on}" data-i="${idx}">
       <span>${esc(p._name)}</span>
-      <span class="desc">${esc(p._desc)}</span></div>`;
+      <span class="desc">${esc(p._desc)}${
+        p._where ? ` · ${esc(p._where.replace(/^Models\//, ''))}` : ''}</span></div>`;
   }).join('');
   for (const el of rows.querySelectorAll('.pp-row')) {
     const r = PP.rows[Number(el.dataset.i)];
