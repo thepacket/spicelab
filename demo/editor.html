@@ -175,13 +175,18 @@
   .pp-head button { width: auto; }
   .pp-body { flex: 1; display: grid; grid-template-columns: 1fr 260px;
              min-height: 0; }
-  .pp-left { display: flex; flex-direction: column; min-width: 0;
+  /* min-height:0 is load-bearing. A flex child defaults to min-height:auto, so
+     #pp-scroll grew to its full 260,416px of virtual rows instead of clipping
+     to the dialog: no scrollbar, and the one render happened while it measured
+     zero — a library of 10,005 parts showed a dozen rows. Same trap CLAUDE.md
+     records for the grid children. */
+  .pp-left { display: flex; flex-direction: column; min-width: 0; min-height: 0;
              border-right: 1px solid var(--line); }
   .pp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem;
              padding: .3rem .6rem; font-size: 10px; text-transform: uppercase;
              letter-spacing: .06em; color: var(--muted);
              border-bottom: 1px solid var(--line); }
-  #pp-scroll { flex: 1; overflow-y: auto; position: relative; }
+  #pp-scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
   #pp-sizer { position: relative; }
   #pp-rows { position: absolute; left: 0; right: 0; top: 0; }
   .pp-row { height: 26px; padding: .2rem .6rem; cursor: pointer;
@@ -1141,16 +1146,29 @@ function openPartPicker(c) {
   }
   PP.groups = new Map([...byGroup].sort((a, b) =>
     groupRank(a[0]) - groupRank(b[0]) || a[0].localeCompare(b[0])));
-  // Built-ins expanded by default: they are the curated, validated set and the
-  // sensible first answer. Everything else starts collapsed, which is what
-  // makes 51,533 candidates browsable at all.
-  PP.open = new Set(['Built-in (validated)']);
+  // EVERY group expanded by default.
+  //
+  // Collapsing all but the built-ins was a reflex from before the list was
+  // virtualised, and it made a library of 10,005 candidates look like a dozen
+  // — the parts were there, behind headers, which is indistinguishable from
+  // them being missing. Virtualisation means an expanded group of 1,000 costs
+  // exactly what a collapsed one does, so there is nothing to buy by hiding
+  // them. Collapsing is now a navigation aid the user reaches for, not a
+  // default that hides the content.
+  PP.open = new Set(PP.groups.keys());
   PP.sel = null;
   document.getElementById('pp-title').textContent =
     `${c.ref}: choose a ${SYMBOLS[c.type].label ?? c.type}`;
   document.getElementById('pp-q').value = '';
   ppBuild('');
-  document.getElementById('part-picker').showModal();
+  const dlg = document.getElementById('part-picker');
+  dlg.showModal();
+  // Re-render once layout has settled: the first pass runs before the dialog
+  // has been laid out, so the scroll container measures zero and only a
+  // handful of rows are produced. Without this the list looks nearly empty
+  // until the user scrolls — and if the container is not clipping it never
+  // scrolls, so it stays that way.
+  requestAnimationFrame(() => requestAnimationFrame(ppRender));
   document.getElementById('pp-q').focus();
 }
 
