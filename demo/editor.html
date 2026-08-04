@@ -601,6 +601,22 @@ function refresh() {
       }
       const note = getPart(cur)?.note;
       if (note) html += `<div class="note">${esc(note)}</div>`;
+
+      // Instance parameters — the geometry and area terms that go on the
+      // ELEMENT card rather than in the .model.
+      //
+      // `emit.js` has always appended `props.params` for these devices, and
+      // nothing ever set it, so W and L were unreachable: every MOSFET placed
+      // from the palette emitted `M1 d g s b MODEL` with no geometry and took
+      // the core's default L = W = 100 um. That default is right — it is
+      // SPICE's own DEFL/DEFW — but W/L is the design parameter of a MOSFET,
+      // and at 100 um the short-channel effects the built-in Level 3 cards
+      // exist to model are inert. The bias rig in schematic.test.mjs passes
+      // `w=20u l=2u`, so the suite was checking geometry the editor could not
+      // produce.
+      html += `<label>Instance parameters</label>` +
+              `<input id="p-inst" value="${esc(c.props.params ?? '')}" ` +
+              `placeholder="${esc(INSTANCE_HINT[c.type] ?? 'area=1')}">`;
     } else {
       html += `<label>Value</label><input id="p-val" value="${c.value ?? ''}">`;
     }
@@ -620,6 +636,11 @@ function refresh() {
     }
     document.getElementById('p-val')?.addEventListener('change',
       (e) => editor.setValue(c.id, e.target.value));
+    document.getElementById('p-inst')?.addEventListener('change', (e) => {
+      editor.commit();
+      c.props = { ...c.props, params: e.target.value.trim() };
+      editor._changed();
+    });
     document.getElementById('p-part')?.addEventListener('change', (e) => {
       editor.commit();
       c.props = { ...c.props, part: e.target.value };
@@ -1154,6 +1175,22 @@ document.getElementById('model-file').onchange = async (ev) => {
 
   refreshState();
 }
+
+/**
+ * What an instance parameter list looks like, per device.
+ *
+ * A hint rather than structured fields: these go on the element card verbatim
+ * and the set differs per device and per model level, so enumerating them here
+ * would be a second, drifting copy of what the core accepts.
+ */
+const INSTANCE_HINT = {
+  nmos: 'w=20u l=2u', pmos: 'w=40u l=2u',
+  nvdmos: 'm=1', pvdmos: 'm=1',
+  njf: 'area=1', pjf: 'area=1',
+  npn: 'area=1', pnp: 'area=1',
+  diode: 'area=1',
+  sw: 'on',
+};
 
 function placedAnalysis(type) {
   return editor.sch.components.find((c) => c.type === type && c.enabled !== false) ?? null;

@@ -456,6 +456,41 @@ console.log('\nEvery palette part emits a simulatable netlist');
           JSON.stringify(bogus));
   }
 
+  // Instance parameters must reach the SOLVER, not just the netlist text.
+  //
+  // W and L were unreachable from the editor: the property panel offered a
+  // part picker and nothing else, so every MOSFET emitted `M1 d g s b MODEL`
+  // and took the core's default L = W = 100u. The default is SPICE's own
+  // DEFL/DEFW and is correct; being unable to override it is not, because W/L
+  // is the design parameter of a MOSFET. This suite hid it: the bias rig above
+  // passes `w=20u l=2u` directly, so it was checking geometry the editor could
+  // not produce.
+  //
+  // A level 1 device in saturation has Id proportional to W/L, so doubling L
+  // must halve the current — an exact ratio, not merely "a different number".
+  {
+    const idFor = (inst) => {
+      const nl = ['geom',
+                  'VDD d 0 DC 5',
+                  'VG g 0 DC 3',
+                  `M1 d g 0 0 MM ${inst}`,
+                  '.model MM NMOS (LEVEL=1 VTO=1 KP=2e-5 LAMBDA=0)',
+                  '.op', '.end'].join('\n');
+      const sess = wasm2.Session.fromNetlist(nl);
+      sess.solveOp();
+      const row = new Float64Array(wasm2.memory.buffer, sess.stagingPtr, sess.stagingLen);
+      const L = sess.labels().split('\n');
+      return Math.abs(row[1 + L.indexOf('I(VDD)')]);
+    };
+    const wide = idFor('w=20u l=2u');
+    const long = idFor('w=20u l=4u');
+    const none = idFor('');
+    check('geometry reaches the solver', wide > 0 && Math.abs(wide - none) / wide > 0.1,
+          `w=20u l=2u gave ${wide}, no geometry gave ${none}`);
+    check('doubling L halves the current, as Id ~ W/L',
+          Math.abs(long / wide - 0.5) < 1e-6, `ratio ${long / wide}`);
+  }
+
   // Provenance must stay attached: these are redistributed under ngspice's
   // Modified BSD, which requires attribution.
   check('every part records its ngspice source',
