@@ -131,8 +131,12 @@
   #right details.sec[open] > summary::before { content: '▾'; }
   #right details.sec > summary:hover { color: var(--fg); }
   #right details.sec > .body { padding-bottom: .5rem; }
-  /* Part chooser */
-  #part-picker { width: min(680px, 92vw); height: min(560px, 86vh); padding: 0;
+  /* Part chooser. A dialog, not another right-panel section: choosing a part
+     is a focused task with one answer. Modelled on KiCad's Choose Symbol —
+     grouped tree, description column, live preview — because the thing that
+     makes that dialog work is being able to tell parts APART without already
+     knowing their names. */
+  #part-picker { width: min(900px, 94vw); height: min(600px, 88vh); padding: 0;
                  border: 1px solid var(--line); border-radius: 6px;
                  background: var(--panel); color: var(--fg); }
   #part-picker::backdrop { background: rgba(0,0,0,.5); }
@@ -142,16 +146,35 @@
              padding: .6rem; border-bottom: 1px solid var(--line); }
   .pp-head input { flex: 1; }
   .pp-head button { width: auto; }
+  .pp-body { flex: 1; display: grid; grid-template-columns: 1fr 260px;
+             min-height: 0; }
+  .pp-left { display: flex; flex-direction: column; min-width: 0;
+             border-right: 1px solid var(--line); }
+  .pp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem;
+             padding: .3rem .6rem; font-size: 10px; text-transform: uppercase;
+             letter-spacing: .06em; color: var(--muted);
+             border-bottom: 1px solid var(--line); }
   #pp-scroll { flex: 1; overflow-y: auto; position: relative; }
   #pp-sizer { position: relative; }
   #pp-rows { position: absolute; left: 0; right: 0; top: 0; }
-  .pp-row { height: 34px; padding: .25rem .6rem; cursor: pointer;
-            border-bottom: 1px solid var(--line); overflow: hidden; }
+  .pp-row { height: 26px; padding: .2rem .6rem; cursor: pointer;
+            display: grid; grid-template-columns: 1fr 1fr; gap: .5rem;
+            align-items: center; font-size: 12px; white-space: nowrap; }
+  .pp-row > span { overflow: hidden; text-overflow: ellipsis; }
+  .pp-row .desc { color: var(--muted); font-size: 11px; }
   .pp-row:hover { background: var(--hover); }
-  .pp-row.cur { background: var(--accent); color: var(--on-fg); }
-  .pp-row .nm { font-size: 12px; }
-  .pp-row .src { font-size: 10px; color: var(--muted); }
-  .pp-row.cur .src { color: var(--on-fg); opacity: .75; }
+  .pp-row.sel { background: var(--accent); color: var(--on-fg); }
+  .pp-row.sel .desc { color: var(--on-fg); opacity: .8; }
+  .pp-row.grp { font-weight: 600; color: var(--fg); }
+  .pp-row.grp .desc { color: var(--muted); }
+  .pp-right { display: flex; flex-direction: column; min-width: 0; padding: .5rem; }
+  #pp-preview { width: 100%; height: 150px; flex: none; background: var(--bg);
+                border: 1px solid var(--line); border-radius: 4px; }
+  #pp-detail { flex: 1; overflow: auto; margin-top: .5rem; font-size: 11px;
+               color: var(--muted); word-break: break-word; }
+  #pp-detail b { color: var(--fg); }
+  #pp-detail .parm { color: var(--fg); font-size: 10.5px; }
+  #pp-detail .warn { color: var(--warn); }
   .pp-foot { padding: .45rem .6rem; border-top: 1px solid var(--line); }
   #lib-dl, #sym-dl { margin-top: .4rem; }
   #sym-dl .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
@@ -283,12 +306,21 @@
     <span id="pp-count" class="what"></span>
     <button id="pp-close" class="ghost">Close</button>
   </div>
-  <!-- Virtualised: only the visible rows exist in the DOM. A diode kind can
-       have 51,533 candidates, and building that many nodes freezes the page —
-       which is why the old UI capped the list at 60 and told the user to type
-       a name they had no way of knowing. -->
-  <div id="pp-scroll"><div id="pp-sizer"><div id="pp-rows"></div></div></div>
-  <div class="pp-foot what" id="pp-note"></div>
+  <div class="pp-body">
+    <div class="pp-left">
+      <div class="pp-cols"><span>Item</span><span>Description</span></div>
+      <!-- Virtualised: only the visible rows exist in the DOM. A diode kind
+           can have 51,533 candidates and building that many nodes freezes the
+           page — which is why the first version capped the list at 60 and told
+           the user to type a name they had no way of knowing. -->
+      <div id="pp-scroll"><div id="pp-sizer"><div id="pp-rows"></div></div></div>
+    </div>
+    <div class="pp-right">
+      <canvas id="pp-preview"></canvas>
+      <div id="pp-detail"></div>
+    </div>
+  </div>
+  <div class="pp-foot"><span class="what" id="pp-note"></span></div>
 </dialog>
 
 <div id="main">
@@ -421,7 +453,7 @@ import {
   listSymbolFiles, downloadSymbols, saveSymbols, symbolMeta, getSymbol,
   searchSymbols, clearSymbols, SYMBOL_LIB,
 } from '../src/schematic/symbol-store.js';
-import { Renderer, SERIES, COLORS, setTheme } from '../src/schematic/render.js';
+import { Renderer, SERIES, COLORS, setTheme, ART } from '../src/schematic/render.js';
 import { probeColor } from '../src/instruments/probe.js';
 import { fourier } from '../src/instruments/fourier.js';
 import { measureAll, signalsIn } from '../src/instruments/measure.js';
@@ -960,37 +992,96 @@ function assignPart(part, from = '') {
   status(`${c.ref} now uses ${part.label}${from ? ` from ${from}` : ''}`);
 }
 
-const PP = { parts: [], shown: [], target: null, rowH: 34 };
+const PP = { target: null, rows: [], open: new Set(), sel: null, rowH: 26 };
 
-function openPartPicker(c) {
-  const dlg = document.getElementById('part-picker');
-  PP.target = c;
-  PP.parts = partsFor(c.type);
-  document.getElementById('pp-title').textContent =
-    `${c.ref}: choose a ${SYMBOLS[c.type].label ?? c.type}`;
-  const q = document.getElementById('pp-q');
-  q.value = '';
-  ppFilter('');
-  dlg.showModal();
-  q.focus();
+/**
+ * The parameters worth showing in the DESCRIPTION column, per kind.
+ *
+ * This is the column that answers "which of these is the one I want?" without
+ * already knowing part names — the thing KiCad's dialog gets right and the
+ * first version of this one did not. A diode's IS and BV, a BJT's BF and VAF,
+ * a MOSFET's VTO and KP are what actually distinguish candidates; dumping the
+ * whole card would be unreadable at one line per part.
+ */
+const NOTABLE = {
+  diode: ['is', 'rs', 'bv', 'cjo'],
+  npn: ['bf', 'vaf', 'is', 'rb'], pnp: ['bf', 'vaf', 'is', 'rb'],
+  nmos: ['level', 'vto', 'kp', 'tox'], pmos: ['level', 'vto', 'kp', 'tox'],
+  njf: ['vto', 'beta', 'lambda'], pjf: ['vto', 'beta', 'lambda'],
+  nvdmos: ['vto', 'kp', 'rd', 'bv'], pvdmos: ['vto', 'kp', 'rd', 'bv'],
+  sw: ['vt', 'vh', 'ron', 'roff'],
+};
+
+function describe(part) {
+  const want = NOTABLE[part.kind] ?? [];
+  const found = [];
+  for (const key of want) {
+    const m = new RegExp(`\\b${key}\\s*=\\s*([^\\s,()]+)`, 'i').exec(part.params ?? '');
+    if (m) found.push(`${key.toUpperCase()}=${m[1]}`);
+  }
+  // Fall back to the first few parameters rather than showing nothing: a card
+  // with none of the notable keys is still better described by its own numbers
+  // than by an empty cell.
+  if (!found.length) {
+    return String(part.params ?? '').split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+  }
+  return found.join(' ');
 }
 
-function ppFilter(query) {
+/** Group a part by where it came from — the natural browse axis. */
+function groupOf(part) {
+  if (!part.id.startsWith('lib:')) return 'Built-in (validated)';
+  const at = part.id.indexOf('@');
+  const hash = part.id.lastIndexOf('#');
+  const path = at >= 0 ? part.id.slice(at + 1, hash > at ? hash : undefined) : '';
+  const clean = path.replace(/^Models[/_]/, '').replace(/_/g, '/');
+  const dir = clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : clean;
+  return dir || 'Uncategorised';
+}
+
+function openPartPicker(c) {
+  PP.target = c;
+  PP.all = partsFor(c.type).map((p) => ({ ...p,
+    _name: p.label.split(' — ')[0], _grp: groupOf(p), _desc: describe(p) }));
+  PP.groups = new Map();
+  for (const p of PP.all) {
+    if (!PP.groups.has(p._grp)) PP.groups.set(p._grp, []);
+    PP.groups.get(p._grp).push(p);
+  }
+  // Built-ins expanded by default: they are the curated, validated set and the
+  // sensible first answer. Everything else starts collapsed, which is what
+  // makes 51,533 candidates browsable at all.
+  PP.open = new Set(['Built-in (validated)']);
+  PP.sel = null;
+  document.getElementById('pp-title').textContent =
+    `${c.ref}: choose a ${SYMBOLS[c.type].label ?? c.type}`;
+  document.getElementById('pp-q').value = '';
+  ppBuild('');
+  document.getElementById('part-picker').showModal();
+  document.getElementById('pp-q').focus();
+}
+
+/** Flatten groups + expanded children into the row list the virtualiser draws. */
+function ppBuild(query) {
   const t = String(query).trim().toLowerCase();
-  PP.shown = t
-    ? PP.parts.filter((p) => p.label.toLowerCase().includes(t)
-                          || p.id.toLowerCase().includes(t))
-    : PP.parts;
-  const total = PP.parts.length;
+  const match = (p) => !t || p._name.toLowerCase().includes(t)
+                    || p._desc.toLowerCase().includes(t) || p._grp.toLowerCase().includes(t);
+  PP.rows = [];
+  let shown = 0;
+  for (const [grp, parts] of PP.groups) {
+    const hits = t ? parts.filter(match) : parts;
+    if (!hits.length) continue;
+    shown += hits.length;
+    // A filter EXPANDS automatically: hiding matches behind a collapsed group
+    // would look like the search found nothing.
+    const open = t ? true : PP.open.has(grp);
+    PP.rows.push({ grp, n: hits.length, open });
+    if (open) for (const p of hits) PP.rows.push({ part: p });
+  }
   document.getElementById('pp-count').textContent =
-    t ? `${PP.shown.length.toLocaleString()} of ${total.toLocaleString()}`
-      : `${total.toLocaleString()} parts`;
-  const builtins = PP.shown.filter((p) => !p.id.startsWith('lib:')).length;
-  document.getElementById('pp-note').textContent = total
-    ? `${builtins} built-in (validated against this solver), ` +
-      `${(PP.shown.length - builtins).toLocaleString()} from the downloaded library.`
-    : 'No parts of this kind. Download the model library under Model libraries.';
-  document.getElementById('pp-sizer').style.height = `${PP.shown.length * PP.rowH}px`;
+    t ? `${shown.toLocaleString()} of ${PP.all.length.toLocaleString()}`
+      : `${PP.all.length.toLocaleString()} parts in ${PP.groups.size} groups`;
+  document.getElementById('pp-sizer').style.height = `${PP.rows.length * PP.rowH}px`;
   document.getElementById('pp-scroll').scrollTop = 0;
   ppRender();
 }
@@ -999,26 +1090,73 @@ function ppRender() {
   const sc = document.getElementById('pp-scroll');
   const rows = document.getElementById('pp-rows');
   const first = Math.max(0, Math.floor(sc.scrollTop / PP.rowH) - 4);
-  const count = Math.ceil(sc.clientHeight / PP.rowH) + 8;
-  const slice = PP.shown.slice(first, first + count);
+  const slice = PP.rows.slice(first, first + Math.ceil(sc.clientHeight / PP.rowH) + 8);
   rows.style.transform = `translateY(${first * PP.rowH}px)`;
   const cur = PP.target?.props?.part ?? defaultPartFor(PP.target?.type)?.id;
-  rows.innerHTML = slice.map((p, i) => {
-    const [name, where] = p.label.split(' — ');
-    return `<div class="pp-row${p.id === cur ? ' cur' : ''}" data-i="${first + i}">
-      <div class="nm">${esc(name)}</div>
-      <div class="src">${esc(where ?? (p.id.startsWith('lib:') ? '' : 'built-in'))}</div>
-    </div>`;
+  rows.innerHTML = slice.map((r, i) => {
+    const idx = first + i;
+    if (r.grp !== undefined) {
+      return `<div class="pp-row grp" data-i="${idx}">
+        <span>${r.open ? '▾' : '▸'} ${esc(r.grp)}</span>
+        <span class="desc">${r.n.toLocaleString()}</span></div>`;
+    }
+    const p = r.part;
+    const on = (PP.sel ? p.id === PP.sel : p.id === cur) ? ' sel' : '';
+    return `<div class="pp-row${on}" data-i="${idx}">
+      <span>${esc(p._name)}</span>
+      <span class="desc">${esc(p._desc)}</span></div>`;
   }).join('');
   for (const el of rows.querySelectorAll('.pp-row')) {
-    el.onclick = () => {
-      const p = PP.shown[Number(el.dataset.i)];
-      document.getElementById('part-picker').close();
-      // Reuse the one assignment path, so the kind check and the undo commit
-      // cannot differ between here and the library search.
-      assignPart(p);
-    };
+    const r = PP.rows[Number(el.dataset.i)];
+    if (r.grp !== undefined) {
+      el.onclick = () => {
+        if (PP.open.has(r.grp)) PP.open.delete(r.grp); else PP.open.add(r.grp);
+        ppBuild(document.getElementById('pp-q').value);
+      };
+    } else {
+      // Single click SELECTS and previews; double click commits. Assigning on
+      // a single click meant you could never look at a part before taking it.
+      el.onclick = () => { PP.sel = r.part.id; ppRender(); ppPreview(r.part); };
+      el.ondblclick = () => {
+        document.getElementById('part-picker').close();
+        assignPart(r.part);
+      };
+    }
   }
+}
+
+/** Draw the symbol and spell out the card, so you see what you are taking. */
+function ppPreview(part) {
+  const cv = document.getElementById('pp-preview');
+  const d = devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  cv.width = Math.max(1, Math.round(r.width * d));
+  cv.height = Math.max(1, Math.round(r.height * d));
+  const g = cv.getContext('2d');
+  g.fillStyle = COLORS.plotBg ?? '#0d1117';
+  g.fillRect(0, 0, cv.width, cv.height);
+  g.save();
+  g.translate(cv.width / 2, cv.height / 2);
+  g.scale(2.2 * d, 2.2 * d);
+  g.strokeStyle = COLORS.symbol; g.fillStyle = COLORS.symbol;
+  g.lineWidth = 1.6; g.lineJoin = 'round';
+  try { (ART[PP.target.type] ?? (() => {}))(g); } catch { /* art is optional */ }
+  g.fillStyle = COLORS.pin;
+  for (const pin of SYMBOLS[PP.target.type].pins ?? []) {
+    g.beginPath(); g.arc(pin.x, pin.y, 1.8, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+
+  const params = String(part.params ?? '').split(/\s+/).filter(Boolean);
+  document.getElementById('pp-detail').innerHTML =
+    `<div><b>${esc(part._name ?? part.label)}</b></div>` +
+    `<div>.model ${esc(part.model)}</div>` +
+    `<div style="margin:.35rem 0"><span class="parm">${
+      params.map(esc).join(' ')}</span></div>` +
+    (part.source ? `<div>${esc(part.source)}</div>` : '') +
+    (part.note ? `<div class="warn" style="margin-top:.35rem">${esc(part.note)}</div>` : '');
+  document.getElementById('pp-note').textContent =
+    'Double-click to use this part, or press Enter.';
 }
 
 {
@@ -1029,8 +1167,15 @@ function ppRender() {
   document.getElementById('pp-q').oninput = (e) => {
     clearTimeout(ppTimer);
     const v = e.target.value;
-    ppTimer = setTimeout(() => ppFilter(v), 80);
+    ppTimer = setTimeout(() => ppBuild(v), 80);
   };
+  dlg.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !PP.sel) return;
+    e.preventDefault();
+    const p = PP.all.find((x) => x.id === PP.sel);
+    dlg.close();
+    if (p) assignPart(p);
+  });
 }
 
 /** Redraw every instrument that sizes itself from the DOM. */
