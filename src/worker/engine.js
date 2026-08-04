@@ -232,6 +232,18 @@ export class SimEngine {
    * renderer: `Probe.resolve` returns a reader parameterised by stride and
    * offset precisely so one resolution path serves every analysis.
    */
+  /**
+   * `.tf` — small-signal gain, input resistance, output resistance.
+   *
+   * Returns three scalars, not rows, so it does not touch the ring or the
+   * staging buffer. Instruments that plot are the wrong home for it; the
+   * caller displays the numbers.
+   */
+  tf({ output, input }) {
+    if (!output || !input) throw new Error('.tf needs an output and an input source');
+    return JSON.parse(this.session.runTf(output, input));
+  }
+
   dc({ source, start = 0, stop = 5, step = 0.1 }) {
     if (!source) throw new Error('a DC sweep needs a source to sweep');
     const n = this.session.runDc(source, start, stop, step);

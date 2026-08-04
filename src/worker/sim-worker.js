@@ -116,6 +116,11 @@ self.onmessage = async (e) => {
         );
         break;
       }
+      case Cmd.TF: {
+        if (!engine.tf) throw new Error(`${engine.label} cannot run .tf`);
+        reply(id, Evt.TF_DONE, engine.tf(args));
+        break;
+      }
       case Cmd.PAUSE:
         engine.pause();
         reply(id, 'paused', {});

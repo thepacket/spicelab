@@ -205,6 +205,26 @@ export const SYMBOLS = {
     ],
     card: (p) => `.dc ${p.source} ${p.start} ${p.stop} ${p.step}`,
   },
+  /**
+   * `.tf` — small-signal transfer function about the operating point.
+   *
+   * `output` is a NET name; the card is emitted in SPICE's `V(out)` spelling
+   * because that is what every textbook and vendor deck writes, and the parser
+   * accepts both forms.
+   *
+   * `input` must be an independent VOLTAGE source, because the analysis
+   * excites that source's own MNA row and only a source owning a branch
+   * current has one. The core says so by name rather than silently using
+   * unknown 0, which would return a plausible number for something else.
+   */
+  tf: {
+    prefix: 'TF', pins: [], directive: true, label: 'Transfer function',
+    params: [
+      { key: 'output', def: 'out' },
+      { key: 'input', def: 'V1' },
+    ],
+    card: (p) => `.tf V(${p.output}) ${p.input}`,
+  },
 
   /**
    * An instance of a `.subckt` macromodel.

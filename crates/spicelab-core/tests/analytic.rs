@@ -20,7 +20,8 @@
 //! a closed form to compare against.
 
 use spicelab_core::analyses::dc::{
-    ac_sweep, bode, dc_sweep, op, AcScale, AcSpec, SweepProperty, SweepSpec,
+    ac_sweep, bode, dc_sweep, op, transfer_function, AcScale, AcSpec, SweepProperty,
+    SweepSpec,
 };
 use spicelab_core::analyses::tran::{tran, TranOptions, TransientRun};
 use spicelab_core::circuit::Circuit;
@@ -1391,4 +1392,71 @@ fn sheet_resistance_equals_an_explicit_series_resistance() {
         (sheet - none).abs() > 1e-4,
         "series resistance changed nothing: {sheet} vs {none}"
     );
+}
+
+/// `.tf` against a circuit whose gain, input resistance and output resistance
+/// are each known in closed form and are each DIFFERENT numbers — so a bug
+/// that returns the right value for one quantity cannot pass by coincidence.
+///
+/// Loaded divider: V1 -- R1=1k -- out -- R2=3k -- gnd, with R3=6k also from
+/// out to ground.
+///
+///   R2 || R3 = 3k*6k/9k             = 2k
+///   gain     = 2k / (1k + 2k)       = 2/3
+///   r_in     = 1k + 2k              = 3k      (seen at V1)
+///   r_out    = 1k || 2k = 2k/3      = 666.67  (V1 shorted, looking into out)
+#[test]
+fn transfer_function_matches_closed_form() {
+    let mut c = Circuit::new("tf");
+    let inn = c.node("in");
+    let out = c.node("out");
+    c.add(DeviceKind::VoltageSource(VoltageSource::new("V1", inn, -1, 1.0)));
+    c.add(DeviceKind::Resistor(Resistor::new("R1", inn, out, 1e3)));
+    c.add(DeviceKind::Resistor(Resistor::new("R2", out, -1, 3e3)));
+    c.add(DeviceKind::Resistor(Resistor::new("R3", out, -1, 6e3)));
+
+    let tf = transfer_function(&mut c, "out", "V1").unwrap();
+    check("tf gain", tf.gain, 2.0 / 3.0, 1e-9);
+    check("tf r_in", tf.r_in, 3e3, 1e-9);
+    check("tf r_out", tf.r_out, 2e3 / 3.0, 1e-9);
+
+    // Sign, pinned deliberately. The branch current is defined flowing INTO
+    // node 0 of the source, so the un-negated value makes an ordinary
+    // resistive load report a NEGATIVE input resistance — which is physically
+    // meaningless and was the bug this assertion exists to prevent.
+    assert!(tf.r_in > 0.0, "input resistance came out negative: {}", tf.r_in);
+    assert!(tf.r_out > 0.0, "output resistance came out negative: {}", tf.r_out);
+
+    // Loading the output must lower BOTH the gain and the output resistance.
+    // A stub returning the unloaded answers would pass the numbers above only
+    // if it happened to be wrong in exactly the right way; this catches that.
+    let mut c2 = Circuit::new("tf-unloaded");
+    let i2 = c2.node("in");
+    let o2 = c2.node("out");
+    c2.add(DeviceKind::VoltageSource(VoltageSource::new("V1", i2, -1, 1.0)));
+    c2.add(DeviceKind::Resistor(Resistor::new("R1", i2, o2, 1e3)));
+    c2.add(DeviceKind::Resistor(Resistor::new("R2", o2, -1, 3e3)));
+    let un = transfer_function(&mut c2, "out", "V1").unwrap();
+    check("unloaded gain", un.gain, 0.75, 1e-9);
+    assert!(un.gain > tf.gain, "loading did not reduce the gain");
+    assert!(un.r_out > tf.r_out, "loading did not reduce the output resistance");
+}
+
+/// An input that owns no branch current cannot be a `.tf` input, and must say
+/// so rather than silently using unknown 0 — which would return a plausible
+/// number for a completely unrelated quantity.
+#[test]
+fn transfer_function_rejects_a_bad_input() {
+    let mut c = Circuit::new("tf-bad");
+    let a = c.node("a");
+    c.add(DeviceKind::VoltageSource(VoltageSource::new("V1", a, -1, 1.0)));
+    c.add(DeviceKind::Resistor(Resistor::new("R1", a, -1, 1e3)));
+
+    let e = transfer_function(&mut c, "a", "R1").unwrap_err();
+    assert!(
+        format!("{e}").contains("branch current"),
+        "unhelpful message: {e}"
+    );
+    let e2 = transfer_function(&mut c, "a", "V9").unwrap_err();
+    assert!(format!("{e2}").contains("V9"), "unhelpful message: {e2}");
 }

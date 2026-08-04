@@ -26,6 +26,102 @@ pub fn op(circuit: &mut Circuit) -> Result<OpResult, SimError> {
     })
 }
 
+/// `.tf` — small-signal DC transfer function about the operating point.
+#[derive(Debug, Clone, Copy)]
+pub struct TfResult {
+    /// d(output)/d(input), dimensionless for a voltage-in voltage-out pair.
+    pub gain: f64,
+    /// Resistance seen looking into the input source's terminals.
+    pub r_in: f64,
+    /// Resistance seen looking back into the output node.
+    pub r_out: f64,
+}
+
+/// Small-signal transfer function: gain, input resistance, output resistance.
+///
+/// This is not new numerics. Every piece already existed: `op` finds the bias
+/// point, `load(Mode::Ac)` linearises about it, and `factor`/`solve` are the
+/// same sparse routines every other analysis uses. What `.tf` adds is three
+/// right-hand sides against ONE factorisation.
+///
+/// `omega = 0` is what makes the linearised matrix the DC small-signal one: a
+/// capacitor's `jwC` vanishes to an open and an inductor's `jwL` to a short,
+/// which is exactly the DC limit. So this reuses the AC assembly rather than
+/// needing a separate DC-linearisation path.
+///
+/// The three solves, all against the same factored `J`:
+///
+///   - **gain**: excite the input source's own MNA row with 1. For a voltage
+///     source that row states `v+ - v- = E`, so a unit there is a unit volt,
+///     and `x[out]` is dV(out)/dE.
+///   - **r_in**: the same solve already carries `x[branch]` = dI/dE, and the
+///     branch current is defined flowing INTO node 0 of the source — out of
+///     its positive terminal into the circuit is therefore `-x[branch]`. Hence
+///     the negation; without it a plain divider reports a negative resistance,
+///     which is how the sign was pinned down.
+///   - **r_out**: inject a unit current into the output node with the input
+///     excitation absent. The Jacobian holds no source VALUES — those live in
+///     the right-hand side — so simply changing the RHS is what "zero the
+///     independent sources" means here, and no source has to be modified and
+///     restored.
+pub fn transfer_function(
+    circuit: &mut Circuit,
+    output: &str,
+    input_source: &str,
+) -> Result<TfResult, SimError> {
+    circuit.ensure_built()?;
+    op(circuit)?;
+
+    let out = circuit.index_of(output)?;
+    if out < 0 {
+        return Err(SimError::Build(format!(
+            "{output} is ground; a transfer function to ground is always zero"
+        )));
+    }
+    let out = out as usize;
+
+    let dev = circuit
+        .device_index(input_source)
+        .ok_or_else(|| SimError::Build(format!("no such source: {input_source}")))?;
+    let branch = *circuit.devices[dev].branches().first().ok_or_else(|| {
+        SimError::Build(format!(
+            "{input_source} has no branch current, so it cannot be a `.tf` input. \
+             Use an independent VOLTAGE source."
+        ))
+    })?;
+
+    let n = circuit.num_unknowns;
+    circuit.ctx.omega = 0.0;
+    circuit.load(Mode::Ac);
+    let bad = circuit.ctx.sys.factor(1e-30);
+    if bad >= 0 {
+        return Err(SimError::Convergence {
+            message: "singular matrix linearising for .tf".to_string(),
+            time: None,
+        });
+    }
+
+    // One factorisation, two right-hand sides.
+    let mut b = vec![0.0; n];
+    b[branch] = 1.0;
+    circuit.ctx.sys.solve(&mut b, None);
+    let gain = b[out];
+    let d_i = -b[branch];
+
+    let mut c = vec![0.0; n];
+    c[out] = 1.0;
+    circuit.ctx.sys.solve(&mut c, None);
+
+    Ok(TfResult {
+        gain,
+        // An ideal source into an open circuit draws no current: report an
+        // infinite resistance rather than dividing by zero and returning inf
+        // by accident, which reads the same but for the wrong reason.
+        r_in: if d_i == 0.0 { f64::INFINITY } else { 1.0 / d_i },
+        r_out: c[out],
+    })
+}
+
 /// Which scalar property of a device a sweep drives.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SweepProperty {

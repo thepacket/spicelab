@@ -235,6 +235,16 @@ export class SimClient {
     return this._send(Cmd.DC, opts);
   }
 
+  /**
+   * Small-signal transfer function. Resolves with `{gain, rIn, rOut}`.
+   * A quantity that is not finite comes back as `null` — an ideal source into
+   * an open circuit has no meaningful input resistance, and saying so beats
+   * printing `Infinity`.
+   */
+  tf(opts) {
+    return this._send(Cmd.TF, opts);
+  }
+
   pause() {
     return this._send(Cmd.PAUSE);
   }

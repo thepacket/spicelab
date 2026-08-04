@@ -199,6 +199,7 @@
   <button data-place="tran">.tran</button>
   <button data-place="ac">.ac</button>
   <button data-place="dc">.dc</button>
+  <button data-place="tf">.tf</button>
   <button data-place="op">.op</button>
 
   <h2>Edit</h2>
@@ -235,6 +236,7 @@
     <button id="run-tran">.tran</button>
     <button id="run-ac">.ac</button>
     <button id="run-dc">.dc</button>
+    <button id="run-tf">.tf</button>
   </div>
   <div class="row">
     <input id="tstop" value="5m" title="tstop"><input id="tstep" value="10u" title="tstep">
@@ -1237,6 +1239,39 @@ document.getElementById('run-dc').onclick = async () => {
     drawScope();
     status(`DC sweep (${block.ref} on the canvas): ${spec.source} from ` +
            `${spec.start} to ${spec.stop}, ${res.points} points`);
+  } catch (e) { status('error: ' + e.message); }
+};
+
+/**
+ * `.tf` — three scalars, so they are REPORTED, not plotted.
+ *
+ * Routing them to the scope would be the easy thing and the wrong one: a gain
+ * and two resistances are not a waveform, and putting them in front of the
+ * probe system would invite it to draw a line through three unrelated
+ * quantities.
+ */
+document.getElementById('run-tf').onclick = async () => {
+  if (!guard()) return;
+  try {
+    const block = placedAnalysis('tf');
+    if (!block) { status('place a .tf block and name the output and input'); return; }
+    const spec = {
+      output: String(block.props.output ?? '').trim(),
+      input: String(block.props.input ?? '').trim(),
+    };
+    if (!spec.output || !spec.input) {
+      status(`${block.ref} needs both an output net and an input source`);
+      return;
+    }
+    const c = await sim();
+    await c.load(current.netlist);
+    showEngine(c);
+    const r = await c.tf(spec);
+    // null means not finite — an ideal source into an open circuit has no
+    // meaningful input resistance, and saying so beats printing Infinity.
+    const ohms = (v) => (v == null ? 'infinite' : eng(v, '\u03A9'));
+    status(`.tf (${block.ref}): V(${spec.output})/${spec.input} = ` +
+           `${eng(r.gain, '')}, Rin = ${ohms(r.rIn)}, Rout = ${ohms(r.rOut)}`);
   } catch (e) { status('error: ' + e.message); }
 };
 

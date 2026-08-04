@@ -23,6 +23,8 @@ export const Cmd = Object.freeze({
   AC: 'ac',
   /** Run a DC sweep to completion. */
   DC: 'dc',
+  /** Small-signal transfer function about the operating point. */
+  TF: 'tf',
   /** Stop producing but keep the session. */
   PAUSE: 'pause',
   /** Resume a paused transient. */
@@ -47,6 +49,8 @@ export const Evt = Object.freeze({
   AC_DONE: 'ac-done',
   /** DC sweep finished; carries rows in the transient shape. */
   DC_DONE: 'dc-done',
+  /** `.tf` finished; carries {gain, rIn, rOut} — scalars, not rows. */
+  TF_DONE: 'tf-done',
   /** Any failure, with a human-readable message. */
   ERROR: 'error',
 });

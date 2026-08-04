@@ -20,7 +20,7 @@
 //! The JS side reads `stride` from the ring header, never hardcodes it.
 
 use spicelab_core::analyses::dc::{
-    ac_sweep, dc_sweep, op, AcScale, AcSpec, SweepProperty, SweepSpec,
+    ac_sweep, dc_sweep, op, transfer_function, AcScale, AcSpec, SweepProperty, SweepSpec,
 };
 use spicelab_core::analyses::tran::{TranOptions, TransientRun};
 use spicelab_core::circuit::Circuit;
@@ -347,6 +347,36 @@ impl Session {
             self.staging.extend_from_slice(&trace.solutions[k]);
         }
         Ok(trace.x.len())
+    }
+
+    /// `.tf` — small-signal gain, input resistance and output resistance.
+    ///
+    /// Three scalars, so this returns JSON rather than going through the
+    /// staging buffer: the staging buffer exists for rows, and pretending
+    /// three unrelated quantities are a one-row "waveform" would put them in
+    /// front of a probe system that would then try to plot them.
+    ///
+    /// A non-finite result is reported as `null` in the JSON rather than as
+    /// `Infinity`, which is not valid JSON and would make the host's
+    /// `JSON.parse` throw — the same hand-rolled-JSON hazard that cost 63
+    /// vendor files before.
+    #[wasm_bindgen(js_name = runTf)]
+    pub fn run_tf(&mut self, output: &str, input: &str) -> Result<String, JsError> {
+        let tf = transfer_function(&mut self.circuit, output, input)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        let num = |v: f64| {
+            if v.is_finite() {
+                format!("{v:?}")
+            } else {
+                "null".to_string()
+            }
+        };
+        Ok(format!(
+            r#"{{"gain":{},"rIn":{},"rOut":{}}}"#,
+            num(tf.gain),
+            num(tf.r_in),
+            num(tf.r_out)
+        ))
     }
 }
 

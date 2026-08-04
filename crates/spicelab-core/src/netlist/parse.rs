@@ -126,6 +126,12 @@ pub struct Subckt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Analysis {
     Op,
+    /// `.tf <output> <input source>` — small-signal gain, input resistance and
+    /// output resistance about the operating point.
+    Tf {
+        output: String,
+        input: String,
+    },
     Dc {
         source: String,
         start: String,
@@ -578,6 +584,30 @@ fn parse_one(lineno: usize, toks: &[String], sink: &mut Sink) -> Result<(), Pars
             "op" => {
                 if let Sink::Top(n) = sink {
                     n.analyses.push(Analysis::Op);
+                }
+                return Ok(());
+            }
+            "tf" => {
+                // `.tf <output> <input source>`. The output is written as a
+                // node name here rather than SPICE's `V(out)` spelling as well
+                // as it; both are accepted, because vendor and textbook decks
+                // use `V(out)` almost universally and rejecting it would be a
+                // gratuitous difference.
+                if toks.len() < 3 {
+                    return err(lineno, ".tf needs an output and an input source");
+                }
+                let out = toks[1].trim();
+                let out = out
+                    .strip_prefix("V(")
+                    .or_else(|| out.strip_prefix("v("))
+                    .and_then(|s| s.strip_suffix(')'))
+                    .unwrap_or(out)
+                    .to_string();
+                if let Sink::Top(n) = sink {
+                    n.analyses.push(Analysis::Tf {
+                        output: out,
+                        input: toks[2].clone(),
+                    });
                 }
                 return Ok(());
             }
