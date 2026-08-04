@@ -81,41 +81,39 @@ if [ ! -f config.status ]; then
     CFLAGS="-O2" >/dev/null
 fi
 
-# XSPICE needs `cmpp`, its code-model preprocessor, and cmpp is a BUILD-TIME
-# tool that has to run on the HOST. Under emmake it gets cross-compiled to
-# wasm and the build then tries to execute a wasm module as a program:
+# Drop the three XSPICE subdirectories nothing here needs, BEFORE building.
 #
-#   .../src/xspice/cmpp/cmpp:2  var Module=typeof Module!="undefined"...
+#   icm      the .cm code-model bundles. They are dlopen-ed at runtime, which
+#            Emscripten cannot do without side modules, so they are dead weight
+#            — and they are the only thing that EXECUTES cmpp, the code-model
+#            preprocessor, which is what made a naive --enable-xspice build try
+#            to run a cross-compiled wasm module as a program.
+#   verilog  the Icarus Verilog interface. Genuinely needs a shared library and
+#            dies under libtool exactly as --with-ngshared does.
+#   vhdl     same shape, same reason.
 #
-# So build it natively in a throwaway tree and drop it in. This is the standard
-# autotools cross-compile workaround, and it is the ACTUAL obstacle XSPICE
-# posed — not the dlopen story this file used to tell.
-if [ ! -x "$BUILD/native/cmpp" ]; then
-  echo "==> native cmpp (build tool, must run on the host)"
-  rm -rf "$BUILD/native" && mkdir -p "$BUILD/native"
-  cp -r "$BUILD/ngspice-$VER" "$BUILD/native/src-tree"
-  ( cd "$BUILD/native/src-tree" && make distclean >/dev/null 2>&1 || true
-    ./configure --enable-xspice --with-ngshared --disable-osdi \
-      --disable-openmp --with-readline=no --with-editline=no \
-      --with-fftw3=no >/dev/null 2>&1
-    make -C src/xspice/cmpp -j8 >/dev/null 2>&1 )
-  cp "$BUILD/native/src-tree/src/xspice/cmpp/cmpp" "$BUILD/native/cmpp"
-  rm -rf "$BUILD/native/src-tree"
-fi
-cp "$BUILD/native/cmpp" src/xspice/cmpp/cmpp
-chmod +x src/xspice/cmpp/cmpp
-touch src/xspice/cmpp/cmpp    # newer than its sources, so make leaves it alone
+# `libngspice.la` links NOTHING from any of them (check `libngspice_la_LIBADD`
+# in src/Makefile), so this costs no functionality and removes the only three
+# failure points. XSPICE itself — including the POLY handling that is the whole
+# reason it is enabled — lives in mif/cm/enh/evt/idn, which still build.
+echo "==> trim xspice subdirs"
+sed -i.bak 's|^SUBDIRS = mif cm enh evt idn cmpp icm verilog vhdl|SUBDIRS = mif cm enh evt idn|' \
+  src/xspice/Makefile
+grep -q '^SUBDIRS = mif cm enh evt idn$' src/xspice/Makefile || {
+  echo "xspice SUBDIRS not trimmed — ngspice's Makefile layout changed" >&2
+  exit 1
+}
 
-# Only the LIBRARY, not the whole tree.
+# The FULL recursive make, not a single target.
 #
-# A full `make` also builds src/xspice/verilog (the Icarus Verilog interface),
-# which genuinely requires a shared library and dies under libtool the same way
-# --with-ngshared does. Nothing here links it, so building it is pure cost. The
-# .cm code-model bundles are skipped for the same reason — see the note about
-# POLY in docs/ngspice-wasm-build.md.
+# `libngspice.la` depends on convenience libraries built by recursing into
+# frontend/, spicelib/, maths/ and misc/. Asking for that one target on a clean
+# tree fails with "No rule to make target 'frontend/libfte.la'" — which an
+# incrementally-built tree hides completely, because those libraries are
+# already there from a previous run. That is how this shipped broken: it passed
+# locally and failed in Docker on the first clean build.
 echo "==> make"
-( cd src && emmake make STATIC=-static libngspice_la_CFLAGS=-static \
-    libngspice_la_LDFLAGS= libngspice.la -j8 >/dev/null )
+emmake make STATIC=-static libngspice_la_CFLAGS=-static libngspice_la_LDFLAGS= -j8 >/dev/null
 
 echo "==> link shim"
 mkdir -p "$ROOT/src/ngspice"
