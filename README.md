@@ -10,7 +10,7 @@ The target is **interactive real-time** — dragging a component value re-solves
 and repaints within one frame. That single requirement shapes most of the
 architecture.
 
-> **Status: working, and honest about its limits.** The numerics are validated
+> **Status: First hours of its development.** The numerics are validated
 > against closed forms and against ngspice. The device library is small. Read
 > [What it is not](#what-it-is-not) before deciding it fits your problem.
 
