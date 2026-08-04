@@ -72,7 +72,7 @@ const CORPORA = [
     subdirs: ['Netlists'],
     pattern: /\.cir$/i,
     maxBytes: 3072,
-    budget: 168,
+    budget: 150,
     hint: 'git clone --depth 1 https://github.com/Xyce/Xyce_Regression .xyce-regression',
   },
 ];
